@@ -1,0 +1,16 @@
+{
+  "name": "travel-agent-system",
+  "version": "1.0.0",
+  "description": "基于大模型 + 智能体（Agent）的全自动个性化旅行规划系统脚手架",
+  "scripts": {
+    "install:all": "npm install && npm run install:backend && npm run install:frontend",
+    "install:backend": "cd backend && npm install",
+    "install:frontend": "cd frontend && npm install",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
