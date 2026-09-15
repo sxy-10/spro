@@ -1,4 +1,13 @@
-node_modules
+﻿node_modules/
 .env
-dist
+backend/.env
+dist/
 *.log
+
+.idea/
+/shelf/
+/.idea/workspace.xml
+/queries/
+/dataSources/
+/dataSources.local.xml
+/httpRequests/
