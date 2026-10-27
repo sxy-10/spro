@@ -1,72 +1,81 @@
-import { Router, Request, Response } from 'express';
-import { AdminProductTemplate, AdminAnalyticsSummary } from '../models/types.js';
+﻿import { Router, Request, Response } from 'express';
+import {
+  getProductsFromDb,
+  insertProductToDb,
+  getAnalyticsFromDb
+} from '../db/repository.js';
+import { pool } from '../db/connection.js';
+import { RowDataPacket } from 'mysql2/promise';
 
 export const adminRouter = Router();
 
-// 模拟旅行社线路库
-let mockProducts: AdminProductTemplate[] = [
-  {
-    productId: 'prod_001',
-    title: '云南大理丽江5日沉浸风情游',
-    destination: '云南',
-    defaultDays: 5,
-    styleTag: '休闲慢节奏',
-    basePriceRmb: 2899,
-    isActive: true
-  },
-  {
-    productId: 'prod_002',
-    title: '川西川藏南线7日越野风光自驾',
-    destination: '四川/西藏',
-    defaultDays: 7,
-    styleTag: '摄影与自驾',
-    basePriceRmb: 4680,
-    isActive: true
-  }
-];
-
 /**
  * GET /api/admin/products
- * 获取后台线路库
+ * 从 MySQL 获取后台线路库
  */
-adminRouter.get('/products', (_req: Request, res: Response) => {
-  res.json({ success: true, data: mockProducts });
+adminRouter.get('/products', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const products = await getProductsFromDb();
+    res.json({ success: true, data: products });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || '获取线路失败' });
+  }
 });
 
 /**
  * POST /api/admin/products
- * 上架新线路
+ * 上架新线路（持久化写入 travel_product）
  */
-adminRouter.post('/products', (req: Request, res: Response): void => {
-  const { title, destination, defaultDays, styleTag, basePriceRmb } = req.body;
-  const newProduct: AdminProductTemplate = {
-    productId: `prod_${Date.now()}`,
-    title,
-    destination,
-    defaultDays: Number(defaultDays) || 3,
-    styleTag: styleTag || '经典游',
-    basePriceRmb: Number(basePriceRmb) || 1999,
-    isActive: true
-  };
-  mockProducts.push(newProduct);
-  res.json({ success: true, message: '线路产品上架成功', data: newProduct });
+adminRouter.post('/products', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { title, destination, defaultDays, styleTag, basePriceRmb } = req.body;
+    if (!title || !destination) {
+      res.status(400).json({ success: false, message: '请提供线路标题和目的地' });
+      return;
+    }
+
+    const newProduct = await insertProductToDb({
+      title,
+      destination,
+      defaultDays: Number(defaultDays) || 3,
+      styleTag: styleTag || '经典游',
+      basePriceRmb: Number(basePriceRmb) || 1999
+    });
+
+    res.json({ success: true, message: '线路产品上架成功并已入库', data: newProduct });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || '线路产品上架失败' });
+  }
 });
 
 /**
  * GET /api/admin/analytics
- * 获取智能体咨询与转化统计
+ * 获取智能体咨询与转化统计（由数据库真实聚合计算）
  */
-adminRouter.get('/analytics', (_req: Request, res: Response) => {
-  const analytics: AdminAnalyticsSummary = {
-    totalConsultations: 1248,
-    plansGeneratedCount: 980,
-    conversionRatePercent: 38.6,
-    popularDestinations: [
-      { city: '云南 (大理/丽江)', count: 420 },
-      { city: '四川 (成都/九寨沟)', count: 310 },
-      { city: '新疆 (伊犁/喀纳斯)', count: 215 },
-      { city: '贵州 (荔波/黄果树)', count: 180 }
-    ]
-  };
-  res.json({ success: true, data: analytics });
+adminRouter.get('/analytics', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const analytics = await getAnalyticsFromDb();
+    res.json({ success: true, data: analytics });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || '获取统计失败' });
+  }
+});
+
+/**
+ * GET /api/admin/tool-logs
+ * 获取智能体工具调用日志（支持 AC3 可观测性证据链）
+ */
+adminRouter.get('/tool-logs', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, session_id, itinerary_id, tool_name, provider, request_summary,
+              response_status, retry_count, is_mock, latency_ms, created_at
+       FROM tool_call_log
+       ORDER BY id DESC
+       LIMIT 20`
+    );
+    res.json({ success: true, data: rows });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message || '获取工具日志失败' });
+  }
 });
