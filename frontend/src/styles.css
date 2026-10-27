@@ -23,215 +23,72 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
-  background-color: #e9ecea;
+  background-color: #eef2ef;
   color: var(--theme-text-primary);
   line-height: 1.45;
-  min-height: 100vh;
-  overflow-x: auto;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
-/* 顶部工程视窗控制栏 */
-.app-viewport-header {
-  position: sticky;
-  top: 0;
-  z-index: 1000;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid #d9e0da;
-  padding: 10px 24px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
-}
-
-.app-brand-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.app-brand-title h1 {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--theme-dark-green);
-}
-
-.app-brand-title .badge-prototype {
-  background: var(--theme-light-green);
-  color: var(--theme-brand-green);
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-weight: 600;
-}
-
-.viewmode-segmented-control {
-  display: flex;
-  background: #ebf0ec;
-  padding: 3px;
-  border-radius: 10px;
-  gap: 4px;
-}
-
-.viewmode-tab-btn {
-  border: none;
-  background: transparent;
-  padding: 6px 14px;
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #4a5950;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.viewmode-tab-btn.active {
-  background: #ffffff;
-  color: var(--theme-dark-green);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-  font-weight: 600;
-}
-
-/* 主舞台容器 */
-.main-stage-container {
-  padding: 24px 16px 60px 16px;
+#root {
+  width: 100%;
+  height: 100%;
   display: flex;
   justify-content: center;
+  align-items: center;
 }
 
-/* 六联屏全景对比流 */
-.panoramic-gallery-row {
-  display: flex;
-  gap: 24px;
-  padding: 10px;
-  overflow-x: auto;
-  width: 100%;
-  max-width: 100vw;
-  align-items: flex-start;
-}
-
-.panoramic-screen-wrapper {
+/* 根容器：统一标准手机尺寸，所有Tab页面宽度绝对一致（390px），杜绝任何页面缩水变形 */
+.app-root-wrapper {
+  width: 390px;
+  min-width: 390px;
+  max-width: 390px;
+  height: 844px;
+  max-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-}
-
-.screen-badge-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #4b5951;
-  background: #dfe6e1;
-  padding: 4px 12px;
-  border-radius: 16px;
-}
-
-/* 单屏真机居中 */
-.single-device-stage {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  width: 100%;
-}
-
-/* 高保真手机机壳（MobileShell） */
-.mobile-shell-device {
-  width: 390px;
-  height: 844px;
   background: #ffffff;
-  border: 11px solid #1f2321;
-  border-radius: 54px;
-  box-shadow: 0 28px 60px -15px rgba(18, 42, 25, 0.28), 0 0 0 1px rgba(0, 0, 0, 0.08);
+  position: relative;
+  box-shadow: 0 8px 32px rgba(18, 42, 25, 0.12);
+  overflow: hidden;
+}
+
+/* 移动端/真机自适应：满屏展现 */
+@media (max-width: 480px), (max-height: 844px) {
+  #root {
+    align-items: stretch;
+  }
+  .app-root-wrapper {
+    width: 100vw;
+    min-width: 0;
+    max-width: 100vw;
+    height: 100%;
+    box-shadow: none;
+  }
+}
+
+/* 纯净手机界面容器：无任何多余黑框与外壳 */
+.mobile-shell-device {
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  background: #ffffff;
   position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  flex-shrink: 0;
-}
-
-/* 状态栏 */
-.mobile-status-bar {
-  height: 48px;
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 26px;
-  background: transparent;
-  z-index: 100;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.status-time {
-  font-size: 14px;
-  font-weight: 700;
-  color: #111;
-  letter-spacing: -0.2px;
-}
-
-/* 灵动岛 (Dynamic Island) */
-.dynamic-island-pill {
-  width: 118px;
-  height: 30px;
-  background: #000000;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding-right: 12px;
-}
-
-.island-camera-dot {
-  width: 10px;
-  height: 10px;
-  background: #112217;
-  border: 1px solid #1d3324;
-  border-radius: 50%;
-}
-
-.status-icons {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #111;
-}
-
-.signal-icon {
-  font-size: 11px;
-}
-
-.battery-icon {
-  font-size: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.battery-level-bar {
-  display: inline-block;
-  width: 18px;
-  height: 9px;
-  border: 1.5px solid #111;
-  border-radius: 2.5px;
-  position: relative;
-}
-
-.battery-level-bar::after {
-  content: "";
-  position: absolute;
-  left: 1px;
-  top: 1px;
-  bottom: 1px;
-  width: 11px;
-  background: #111;
-  border-radius: 1px;
 }
 
 /* 屏幕主滚动区域 */
@@ -244,13 +101,14 @@ body {
   position: relative;
   background: #ffffff;
   scrollbar-width: none;
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .mobile-screen-body::-webkit-scrollbar {
   display: none;
 }
 
-/* 底部包裹层与 Home Bar */
+/* 底部导航包裹层 */
 .mobile-footer-wrapper {
   width: 100%;
   background: #ffffff;
@@ -259,21 +117,7 @@ body {
   display: flex;
   flex-direction: column;
   z-index: 50;
-}
-
-.mobile-home-indicator {
-  height: 20px;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.home-bar-line {
-  width: 134px;
-  height: 4.5px;
-  background: #111;
-  border-radius: 10px;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* TabBar 底部导航栏 */
@@ -322,7 +166,7 @@ body {
 
 /* 画面 1：【计划】（PlanScreen） */
 .screen-plan-container {
-  padding: 8px 20px 24px 20px;
+  padding: 16px 20px 24px 20px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -1217,6 +1061,15 @@ body {
   cursor: pointer;
   transform: translate(-50%, -50%);
   transition: transform 0.15s ease;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+.bubble-avatar-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .map-inspiration-bubble:hover {
@@ -1229,6 +1082,12 @@ body {
   border-radius: 50%;
   background: #2a6839;
   border: 1.5px solid #dff2e4;
+}
+
+.bubble-text-content {
+  display: flex;
+  flex-direction: column;
+  white-space: nowrap;
 }
 
 .bubble-pin-title {

@@ -25,8 +25,6 @@ import { ExportModal } from './components/ExportModal';
 export default function App() {
   // 当前激活的屏幕/标签
   const [currentTab, setCurrentTab] = useState<ActiveTabKey>('plan');
-  // 展示模式：'single' 单屏真机交互 vs 'panoramic' 六联屏全景对比
-  const [viewMode, setViewMode] = useState<'single' | 'panoramic'>('single');
 
   // 方案数据
   const [itinerary, setItinerary] = useState<DetailedItinerary>(defaultPrototypeItinerary);
@@ -300,122 +298,20 @@ export default function App() {
 
   return (
     <div className="app-root-wrapper">
-      {/* 顶部控制栏 */}
-      <header className="app-viewport-header">
-        <div className="app-brand-title">
-          <h1>旅行规划智能体系统</h1>
-          <span className="badge-prototype">原型图高保真脚手架</span>
-        </div>
-
-        <div className="viewmode-segmented-control">
-          <button
-            type="button"
-            className={`viewmode-tab-btn ${viewMode === 'single' ? 'active' : ''}`}
-            onClick={() => setViewMode('single')}
-          >
-            📱 手机真机交互
-          </button>
-          <button
-            type="button"
-            className={`viewmode-tab-btn ${viewMode === 'panoramic' ? 'active' : ''}`}
-            onClick={() => setViewMode('panoramic')}
-          >
-            🖼️ 原型六联屏全景对比
-          </button>
-        </div>
-      </header>
-
-      {/* 主舞台区 */}
-      <main className="main-stage-container">
-        {viewMode === 'single' ? (
-          /* 单屏真机操作模式 */
-          <div className="single-device-stage">
-            <MobileShell
-              screenTitle={currentTab}
-              footerComponent={
-                currentTab !== 'admin' ? (
-                  <TabBar
-                    currentTab={currentTab}
-                    onTabChange={(tab) => setCurrentTab(tab)}
-                  />
-                ) : undefined
-              }
-            >
-              {renderScreenContent(currentTab)}
-            </MobileShell>
-          </div>
-        ) : (
-          /* 六联屏全景对比模式（完全还原原型图6屏并列） */
-          <div className="panoramic-gallery-row">
-            <div className="panoramic-screen-wrapper">
-              <span className="screen-badge-label">1. 计划 (Landing)</span>
-              <MobileShell
-                screenTitle="plan"
-                footerComponent={
-                  <TabBar currentTab="plan" onTabChange={(tab) => { setCurrentTab(tab); setViewMode('single'); }} />
-                }
-              >
-                {renderScreenContent('plan')}
-              </MobileShell>
-            </div>
-
-            <div className="panoramic-screen-wrapper">
-              <span className="screen-badge-label">2. 智能体 (对话)</span>
-              <MobileShell
-                screenTitle="agent"
-                footerComponent={
-                  <TabBar currentTab="agent" onTabChange={(tab) => { setCurrentTab(tab); setViewMode('single'); }} />
-                }
-              >
-                {renderScreenContent('agent')}
-              </MobileShell>
-            </div>
-
-            <div className="panoramic-screen-wrapper">
-              <span className="screen-badge-label">3. 行程 (方案详情)</span>
-              <MobileShell
-                screenTitle="itinerary"
-                footerComponent={
-                  <TabBar currentTab="itinerary" onTabChange={(tab) => { setCurrentTab(tab); setViewMode('single'); }} />
-                }
-              >
-                {renderScreenContent('itinerary')}
-              </MobileShell>
-            </div>
-
-            <div className="panoramic-screen-wrapper">
-              <span className="screen-badge-label">4. 探索 (地图)</span>
-              <MobileShell
-                screenTitle="explore"
-                footerComponent={
-                  <TabBar currentTab="explore" onTabChange={(tab) => { setCurrentTab(tab); setViewMode('single'); }} />
-                }
-              >
-                {renderScreenContent('explore')}
-              </MobileShell>
-            </div>
-
-            <div className="panoramic-screen-wrapper">
-              <span className="screen-badge-label">5. 我的 (个人中心)</span>
-              <MobileShell
-                screenTitle="profile"
-                footerComponent={
-                  <TabBar currentTab="profile" onTabChange={(tab) => { setCurrentTab(tab); setViewMode('single'); }} />
-                }
-              >
-                {renderScreenContent('profile')}
-              </MobileShell>
-            </div>
-
-            <div className="panoramic-screen-wrapper">
-              <span className="screen-badge-label">6. 旅行社智能体管理中台</span>
-              <MobileShell screenTitle="admin">
-                {renderScreenContent('admin')}
-              </MobileShell>
-            </div>
-          </div>
-        )}
-      </main>
+      {/* 手机界面主体 */}
+      <MobileShell
+        screenTitle={currentTab}
+        footerComponent={
+          currentTab !== 'admin' ? (
+            <TabBar
+              currentTab={currentTab}
+              onTabChange={(tab) => setCurrentTab(tab)}
+            />
+          ) : undefined
+        }
+      >
+        {renderScreenContent(currentTab)}
+      </MobileShell>
 
       {/* 导出长文弹窗 */}
       <ExportModal
