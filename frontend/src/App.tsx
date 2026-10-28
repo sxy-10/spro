@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { request, isLoggedIn, logout } from './api';
+import { LoginScreen } from './components/LoginScreen';
 import {
   ActiveTabKey,
   DetailedItinerary,
@@ -23,6 +25,7 @@ import { AdminScreen } from './components/AdminScreen';
 import { ExportModal } from './components/ExportModal';
 
 export default function App() {
+  const [user, setUser] = useState<any>(null);
   // 当前激活的屏幕/标签
   const [currentTab, setCurrentTab] = useState<ActiveTabKey>('plan');
 
@@ -32,6 +35,10 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessageItem[]>(defaultChatMessages);
   // 管理中台数据
   const [adminData, setAdminData] = useState<AdminMetricsData>(defaultAdminMetrics);
+  useEffect(() => {
+    if (currentTab !== 'admin' || user?.role !== 'ADMIN') return;
+    request('/admin/routes').then(data => setAdminData(prev => ({...prev, routes:data.list.map((r:any)=>({id:r.route_id,title:r.title,description:`${r.destination} · ¥${r.base_price_rmb}`,statusText:r.status==='ON_SALE'?'在售':'已下架'}))}))).catch(error=>alert(error.message));
+  }, [currentTab, user]);
 
   // 智能体生成中状态
   const [isGenerating, setIsGenerating] = useState(false);
@@ -53,22 +60,23 @@ export default function App() {
     setIsGenerating(true);
 
     try {
-      const res = await fetch('/api/chat/plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: userText })
-      });
-      const data = await res.json();
-
-      if (data.success && data.data?.itinerary) {
-        const backendPlan = data.data.itinerary;
+      if (!isLoggedIn()) { setCurrentTab('profile'); throw new Error('请先登录后再生成行程'); }
+      const start = new Date(); start.setUTCHours(0,0,0,0);
+      const days = Math.min(30, Math.max(1, Number(userText.match(/(\d+)\s*天/)?.[1] ?? 5)));
+      const end = new Date(start.getTime() + (days-1)*86400000);
+      const destination = userText.match(/(?:去|到|探索)[「\s]*([\u4e00-\u9fa5]{2,3})(?:和|玩|旅游|\d|[」\s，,])/u)?.[1] ?? '昆明';
+      const data = await request('/plans','POST',{destination,start_date:start.toISOString(),end_date:end.toISOString(),prompt:userText});
+      if (data?.plan_id) {
+        const camel = (value:any):any => Array.isArray(value) ? value.map(camel) : value && typeof value==='object' ? Object.fromEntries(Object.entries(value).map(([k,v])=>[k.replace(/_([a-z])/g,(_,c)=>c.toUpperCase()),camel(v)])) : value;
+        const backendPlan = camel(data);
+        backendPlan.itineraryId = data.plan_id;
         const mappedItinerary: DetailedItinerary = {
           planId: backendPlan.itineraryId || `plan_${Date.now()}`,
           title: backendPlan.planTitle || '定制旅行规划方案',
           subTagText: `${backendPlan.userPreference?.travelStyle || '休闲纯玩'} · 智能排布 · 无购物`,
           routeText: `${backendPlan.userPreference?.departureCity || '出发地'} ➔ ${backendPlan.userPreference?.destinationCities?.join(' · ') || '目的地'}`,
           durationSummary: `${backendPlan.userPreference?.daysCount || 5}天${backendPlan.userPreference?.nightsCount || 4}晚`,
-          budgetSummaryRmb: backendPlan.estimatedTotalBudgetRmb || 7890,
+          budgetSummaryRmb: Number(backendPlan.estimatedTotalBudgetRmb),
           judgeOptimalityScore: '0回头路',
           judgeCertification: {
             statusTitle: '行程判官认证：无硬伤',
@@ -130,25 +138,8 @@ export default function App() {
       } else {
         throw new Error('API 生成失败');
       }
-    } catch (_err) {
-      // 后端降级保障：输出原型真实对话效果
-      setTimeout(() => {
-        const fallbackAgentMessage: ChatMessageItem = {
-          id: `agent_${Date.now()}`,
-          sender: 'agent',
-          semanticTags: ['智能语义解析 (2人/5天/¥8000)'],
-          toolTags: [
-            '昆明/大理天气API 21°C晴',
-            '12306车次实时比价',
-            '携程高分洱海海景客栈',
-            '行程判官: 0硬伤路线最优'
-          ],
-          content: '主人，奴仆已全身心为您查、算、排完毕！已为您定制「云南5天4晚·慢调风花雪月」路线，全程不走回头路、无强制购物，并锁定了地道野生菌与白族风味：',
-          showItineraryLink: true,
-          createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages((prev) => [...prev, fallbackAgentMessage]);
-      }, 600);
+    } catch (err) {
+      setMessages(prev=>[...prev,{id:`error_${Date.now()}`,sender:'agent',content:err instanceof Error?err.message:'生成失败，请稍后重试',createdAt:new Date().toLocaleTimeString()}]);
     } finally {
       setIsGenerating(false);
     }
@@ -158,21 +149,11 @@ export default function App() {
   const handleReorderItinerary = async () => {
     setIsReordering(true);
     try {
-      const res = await fetch('/api/itinerary/optimize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          itinerary,
-          instruction: '优化每日游玩节奏，减少排队拥挤'
-        })
-      });
-      if (res.ok) {
-        alert('已重新调用智能体重排排布！');
-      } else {
-        alert('重排成功！已为您再次校验路线闭环与车程。');
-      }
-    } catch {
-      alert('重排成功！已根据最新路况与开放时间优化时间轴。');
+      const data = await request(`/plans/${itinerary.planId}`,'PATCH',{instruction:'优化每日游玩节奏，减少排队拥挤'});
+      setItinerary(prev=>({...prev,title:data.plan_title??prev.title,subTagText:data.summary_description??prev.subTagText}));
+      alert('调整要求已保存至新版本');
+    } catch (err) {
+      alert(err instanceof Error?err.message:'调整失败');
     } finally {
       setIsReordering(false);
     }
@@ -251,12 +232,17 @@ export default function App() {
           />
         );
       case 'profile':
+        if (!user || !isLoggedIn()) return <LoginScreen onLogin={setUser} />;
         return (
           <ProfileScreen
+            nickname={user.nickname || user.mobile}
+            isAdmin={user.role === 'ADMIN'}
+            onLogout={async () => { try { await logout(); setUser(null); } catch (e) { alert(e instanceof Error ? e.message : '退出失败'); } }}
             onOpenAdminConsole={() => setCurrentTab('admin')}
           />
         );
       case 'admin':
+        if (!user || user.role !== 'ADMIN') return <p>需要管理员权限</p>;
         return (
           <AdminScreen
             adminData={adminData}
@@ -275,19 +261,11 @@ export default function App() {
                 ]
               }));
             }}
-            onAddNewRoute={() => {
-              setAdminData((prev) => ({
-                ...prev,
-                routes: [
-                  ...prev.routes,
-                  {
-                    id: `route_${Date.now()}`,
-                    title: '贵州荔波黄果树4天3晚清凉游',
-                    description: '包含喀斯特地貌核心风景 | 库存充足',
-                    statusText: '在售'
-                  }
-                ]
-              }));
+            onAddNewRoute={async () => {
+              try {
+                const route = await request('/admin/routes','POST',{title:'贵州荔波黄果树4天3晚清凉游',destination:'贵州',default_days:4,style_tag:'自然',base_price_rmb:'2680.00'});
+                setAdminData(prev=>({...prev,routes:[...prev.routes,{id:route.route_id,title:route.title,description:`${route.destination} · ¥${route.base_price_rmb}`,statusText:'在售'}]}));
+              } catch(e) { alert(e instanceof Error?e.message:'上架失败'); }
             }}
           />
         );
