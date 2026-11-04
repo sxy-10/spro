@@ -35,3 +35,6 @@ yarn-debug.log*
 # 系统缓存
 .DS_Store
 Thumbs.db
+
+# WorkBuddy 工作区数据（非项目文件）
+.workbuddy/
