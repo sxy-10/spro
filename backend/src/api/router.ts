@@ -8,7 +8,9 @@ import { pool } from '../db/connection.js';
 import { TravelPlannerAgent } from '../agent/planner.js';
 import { generateUlid } from '../db/repository.js';
 import { travelDate, lockSeats, releaseSeats } from './stock.js';
-import { ApiError, authenticate, id, mobile, utc, money, reply, run, page, list, write, secret, maskMobile, rateLimit, serialize } from './core.js';
+import { ApiError, id, mobile, utc, money, reply, run, page, list, write, secret, maskMobile, rateLimit, serialize } from './core.js';
+import { authenticateJwt } from '../auth/passport.js';
+import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
 
 export const api = Router();
 const planner = new TravelPlannerAgent();
@@ -25,7 +27,7 @@ api.use((req, _res, next) => { rateLimit(`ip:${req.ip}`, 120).then(() => next(),
 api.post('/auth/register', run(async (req, res) => {
   const body = credentials.parse(req.body);
   await rateLimit(`auth:${req.ip}`, 10);
-  const passwordHash = await bcrypt.hash(body.password, 12);
+  const passwordHash = await hashPassword(body.password);
   await write(req, res, async conn => {
     await conn.query('INSERT INTO sys_user(username,phone,password_hash) VALUES (?,?,?)', [body.mobile, body.mobile, passwordHash]);
     const [rows] = await conn.query<RowDataPacket[]>('SELECT CAST(id AS CHAR) AS user_id FROM sys_user WHERE phone=?', [body.mobile]);
@@ -35,11 +37,14 @@ api.post('/auth/register', run(async (req, res) => {
 api.post('/auth/login', run(async (req, res) => {
   const body = credentials.parse(req.body);
   await rateLimit(`auth:${req.ip}`, 10);
+  await checkLoginLockout(body.mobile);
   const [rows] = await pool.query<RowDataPacket[]>('SELECT id,password_hash FROM sys_user WHERE phone=? AND status=\'ACTIVE\'', [body.mobile]);
-  // Always perform a password hash check, including unknown users.
-  const fallback = '$2b$12$XJj1kPqRhuG4aWpEYoU4jO95bY.H8QkJ9PxJu1BxKocJr6BExJXhS';
-  const valid = await bcrypt.compare(body.password, rows[0]?.password_hash ?? fallback);
-  if (!rows.length || !valid) throw new ApiError(401, 20013, '手机号或密码错误');
+  const valid = await verifyPasswordConstantTime(body.password, rows[0]?.password_hash);
+  if (!rows.length || !valid) {
+    await recordLoginFailure(body.mobile);
+    throw new ApiError(401, 20013, '手机号或密码错误');
+  }
+  await clearLoginLockout(body.mobile);
   const userId = String(rows[0].id), sessionId = randomUUID();
   const token = jwt.sign({}, secret(), { algorithm: 'HS256', subject: userId, jwtid: sessionId, expiresIn: '30m', issuer: 'travel-agent', audience: 'travel-client' });
   await write(req, res, async conn => {
@@ -76,7 +81,7 @@ api.get('/spots', run(async (req, res) => {
   reply(res, await list(pool, `SELECT id,id AS spot_id,name,city_name,address,rating,opening_hours,cover_image_url,created_at ${where}`, `SELECT COUNT(*) total ${where}`, p.city_name ? [p.city_name] : [], p));
 }));
 
-api.use(authenticate);
+api.use(authenticateJwt);
 api.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store'); rateLimit(`user:${res.locals.user.id}`, 90).then(() => next(), next); });
 api.post('/auth/logout', run(async (req, res) => {
   await write(req, res, async conn => {

@@ -11,9 +11,15 @@
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
   },
   "devDependencies": {
+    "@types/ioredis": "^4.28.10",
+    "@types/passport": "^1.0.17",
+    "@types/passport-jwt": "^4.0.1",
     "concurrently": "^9.1.2"
   },
   "dependencies": {
-    "mysql2": "^3.24.6"
+    "ioredis": "^6.0.0",
+    "mysql2": "^3.24.6",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1"
   }
 }

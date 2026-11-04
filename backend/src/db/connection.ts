@@ -23,6 +23,7 @@ export const pool = mysql.createPool({
 pool.on('connection', connection => { connection.query("SET time_zone = '+00:00'"); });
 
 /**
+ * 
  * 验证数据库连通性
  */
 export async function checkDatabaseConnection(): Promise<boolean> {
@@ -32,11 +33,11 @@ export async function checkDatabaseConnection(): Promise<boolean> {
     connection.release();
     const isHealthy = Array.isArray(rows) && rows.length > 0;
     if (isHealthy) {
-      console.log('✅ [Database] MySQL 数据库连接成功 (travel_agent_db)');
+      console.log('[Database] MySQL 数据库连接成功 (travel_agent_db)');
     }
     return isHealthy;
   } catch (error: any) {
-    console.error('❌ [Database] MySQL 数据库连接失败:', error.message);
+    console.error('[Database] MySQL 数据库连接失败:', error.message);
     return false;
   }
 }

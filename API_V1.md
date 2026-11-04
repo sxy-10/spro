@@ -4,8 +4,8 @@
 
 ## 启动
 
-1. 新数据库执行 `sql/01_schema.sql`，按需执行 `sql/02_seed.sql`；已有数据库不要重跑带 DROP 的初始化脚本。
-2. 对数据库依次执行增量迁移 `sql/04_api_v1.sql`、`sql/05_route_stock.sql`，新增逻辑删除、出行日期、会话、幂等、防重放、限流、评论、日期库存及订单锁位字段。各迁移仅执行一次，已执行 04 时只执行 05。
+1. 新数据库执行 `database/01_schema.sql`，按需执行 `database/02_seed.sql`；已有数据库不要重跑带 DROP 的初始化脚本。
+2. 对数据库依次执行增量迁移 `database/04_api_v1.sql`、`database/05_rbac_schema.sql`、`database/06_route_stock.sql`，新增会话、幂等、限流、RBAC权限及日期库存锁位字段。
 3. 复制 `backend/.env.example` 为 `backend/.env`，配置 MySQL 和至少 32 字符的随机 `JWT_SECRET`。
 4. 在 backend、frontend 分别运行 `npm install`。后端运行 `npm run dev`，前端运行 `npm run dev`。验证命令为后端 `npm test`、两端 `npm run build`。
 

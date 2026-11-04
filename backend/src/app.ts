@@ -5,6 +5,7 @@ import compression from 'compression';
 import { randomUUID } from 'node:crypto';
 import { api } from './api/router.js';
 import { ApiError, errors } from './api/core.js';
+import passport from './auth/passport.js';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -39,6 +40,7 @@ app.use((req, _res, next) => {
   }
   next();
 });
+app.use(passport.initialize());
 app.use('/v1', api);
 app.use((_req, _res, next) => next(new ApiError(404,20012,'接口不存在')));
 app.use(errors);
