@@ -16,7 +16,8 @@
 | 接口挂载与缓存失效 | `backend/src/api/rbacRouter.ts` | 全部守卫改成 `requireAction(...)`；写操作成功后立即作废策略缓存 |
 | 单元测试 12 例 | `backend/src/auth/rbac.test.ts` | 折算口径 / Casbin 判定 / 守卫三态 / 真实 HTTP 链路 |
 | 联调验收脚本 | `backend/src/api/rbacRouter.e2e.ts` | 第 7 段专测「改完权限立即生效」，需真实 MySQL |
-| 依赖 | `backend/package.json` | 新增 `casbin@^5.51`，新增 `test:rbac`、`test:auth`、`e2e:rbac` 脚本 |
+| 数据库体检 | `backend/src/db/preflight.ts` | `npm run db:check` 只读检查 `.env`、MySQL、建库脚本是否跑全、种子数据是否够 |
+| 依赖 | `backend/package.json` | 新增 `casbin@^5.51`，新增 `test:rbac`、`test:auth`、`e2e:rbac`、`db:check` 脚本 |
 
 一句话结论：**认证（你是谁）在组员 1 那里，授权（你能做什么）现在统一由 Casbin 判定，路由上只写一行 `requireAction(模块:资源, 操作)`。**
 
@@ -232,18 +233,59 @@ npx tsc --noEmit      # 类型检查
 - 只给 `route:line:query` → 新增线路 403（读权限不放大成写权限）；
 - `g, 42, AGENCY_ADMIN` 单独生效（证明角色继承真的走了 `sys_user_role`，而不是只信 Token 里的快照）。
 
-### 2. 真实数据库联调（需 `.env` 指向已执行 01 → 05 脚本的库）
+### 2. 真实数据库联调（已实跑通过）
+
+**前置体检（只读，不改数据）**：
 
 ```bash
 cd backend
+npm run db:check
+```
+
+它会检查 `.env` 是否齐全、MySQL 是否连得上、库是否存在，并按 01 → 04 → 05 → 06 反推「缺哪张表」，最后给出要补的命令。数据库不存在时会直接告诉你「连 01_schema.sql 都没执行过」。
+
+**建库顺序**（在项目根目录执行，顺序不能颠倒）：
+
+```bash
+mysql -u root -p --default-character-set=utf8mb4 < database/01_schema.sql
+mysql -u root -p --default-character-set=utf8mb4 < database/04_api_v1.sql
+mysql -u root -p --default-character-set=utf8mb4 < database/05_rbac_schema.sql
+mysql -u root -p --default-character-set=utf8mb4 < database/06_route_stock.sql
+```
+
+> Windows 下必须带 `--default-character-set=utf8mb4`。mysql 客户端默认按 GBK 解码，而 05 的种子数据含中文角色名/权限名，会报 `ERROR 1366 Incorrect string value: '\xAE\xA2' for column 'name'`——不是脚本坏了，是客户端编码不对。
+>
+> `02_seed.sql` 是业务演示数据（POI、线路、订单），联调和 RBAC 验收都不依赖它，可以不执行。
+
+**跑联调**：
+
+```bash
 npm run e2e:rbac      # 第 7 段专门验证「改完权限立即生效」
 ```
 
-脚本开头会**自动准备联调账号**（幂等，可反复执行）：创建/重置 `13800000001`（超管）、`13800000002`（社管）、`13800000003`（游客），密码统一 `Passw0rd!23`，并按 `SUPER_ADMIN / AGENCY_ADMIN / TOURIST` 覆盖式绑定角色。
+脚本开头会**自动准备联调账号**（幂等，可反复执行）：创建/重置 `13800000001`（超管）、`13800000002`（社管）、`13800000003`（游客），密码统一 `Passw0rd!23`，并按 `SUPER_ADMIN / AGENCY_ADMIN / TOURIST` 覆盖式绑定角色。建 ADMIN 账号需要 `agency_id`，而 `sys_user` 上有外键 `fk_user_agency`，所以脚本会先幂等补一条 `travel_agency(id=1)`，不依赖 `02_seed.sql`。
 
 > 为什么不让脚本直接用 `02_seed.sql` 的账号：那份种子里的密码是占位哈希，登录必然失败，而且只建了 2 个账号、没有 `sys_user_role` 绑定。联调要的是「三种角色各一个能登录的账号」，与其手工建号，不如让脚本自己补。
 
 第 7 段做的事：建临时角色 → 只给 `route:line:query` → 引擎判定「查询放行、新增拒绝」→ 补上 `route:line:add` → **不再等待就直接放行** → 打印策略条数（`p`/`g`）→ 删掉临时角色。
+
+**实测结果（2026-11-04，本机 MySQL 8.0.42 / travel_agent_db）**：
+
+```
+=== 3. 角色列表的越权拦截 ===
+PASS  社管 GET /roles → 403/20013  ->  [403,20013]
+PASS  超管 GET /roles → 200  ->  200
+=== 7. Casbin 策略热更新（组员2 阶段二验收点）===
+{"event":"rbac.policy.invalidated","reason":"PUT /v1/roles/5/permissions"}
+{"event":"rbac.policy.loaded","grouping_rules":3,"policy_rules":51}
+PASS  Casbin：只给 query → 查询放行  ->  true
+PASS  Casbin：只给 query → 新增拒绝（不是只读人就都能写）  ->  false
+PASS  Casbin：补完 add 授权后立即生效（缓存已被写操作作废）  ->  true
+   策略条数：p=51，g=3
+ALL PASS
+```
+
+日志里能直接看到证据链：写授权 → `rbac.policy.invalidated` → 下一次判定重新 `rbac.policy.loaded`，策略条数从 50 变 51，所以「立即生效」不是靠等缓存过期。
 
 ### 3. 手工自查 SQL（确认策略数据本身是对的）
 
@@ -302,6 +344,7 @@ backend/src/auth/rbac.ts              requireAction 等守卫中间件
 backend/src/auth/rbac.test.ts         12 个用例（含 HTTP 全链路）
 backend/src/api/rbacRouter.ts         9 个 RBAC 接口 + 策略缓存失效钩子
 backend/src/api/rbacRouter.e2e.ts     真实数据库联调（含策略热更新验收）
+backend/src/db/preflight.ts            数据库/配置体检（npm run db:check，只读）
 database/05_rbac_schema.sql           阶段一产物：4 张表 + 种子角色（策略数据来源）
 API_V1.md                             补充「401/403 与 Casbin 判定」契约说明
 ```
