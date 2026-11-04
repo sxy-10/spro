@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { RowDataPacket, ResultSetHeader, PoolConnection } from 'mysql2/promise';
 import { pool } from '../db/connection.js';
 import { ApiError, id, mobile, reply, run, page, list, write } from './core.js';
-import { matchPermission, requirePermission } from '../auth/rbac.js';
+import { matchPermission, requireAction } from '../auth/rbac.js';
+import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword } from '../auth/security.js';
 
 /**
@@ -13,16 +14,17 @@ import { hashPassword } from '../auth/security.js';
  *   router.ts 由组员3 并行维护，RBAC 接口独立成模块后，
  *   合并时只需在 router.ts 里加一行 api.use(rbac)，不会和业务接口互相冲突。
  *
- * 权限码与 database/05_rbac_schema.sql 的种子数据一一对应：
+ * 权限码与 database/05_rbac_schema.sql 的种子数据一一对应，守卫统一用 requireAction(module, action)：
  *   GET    /users/me                 已登录即可（无需额外权限）
  *   GET    /users/me/permissions     已登录即可（前端动态路由 / 按钮控制的数据源）
- *   GET    /roles                    system:role:query
- *   POST   /roles                    system:role:add
- *   PUT    /roles/:id                system:role:update
- *   DELETE /roles/:id                system:role:delete
- *   GET    /roles/:id/permissions    system:role:query
- *   PUT    /roles/:id/permissions    system:role:update
- *   GET    /permissions              system:permission:query
+ *   GET    /roles                    requireAction('system:role', 'query')
+ *   POST   /roles                    requireAction('system:role', 'add')
+ *   PUT    /roles/:id                requireAction('system:role', 'update')
+ *   DELETE /roles/:id                requireAction('system:role', 'delete')
+ *   GET    /roles/:id/permissions    requireAction('system:role', 'query')
+ *   PUT    /roles/:id/permissions    requireAction('system:role', 'update')
+ *   GET    /permissions              requireAction('system:permission', 'query')
+ * 判定由 Casbin 完成（见 auth/casbin.ts），本文件只负责「改数据」+「改完让策略缓存失效」。
  *
  * 约定：
  *   - 写操作带 Idempotency-Key（走 core.write，与组员3 的业务写接口同一套幂等实现）；
@@ -31,6 +33,24 @@ import { hashPassword } from '../auth/security.js';
  */
 
 export const rbac = Router();
+
+/**
+ * 策略缓存失效钩子（组员2 · 阶段二）
+ *
+ * Casbin 的策略是「读库 + 内存缓存 30s」的。若只在读接口上缓存、写接口后不通知，
+ * 会出现「超管刚给角色勾完权限，用户刷新还是 403，等半分钟才好」的诡异现象。
+ * 这里统一挂在路由层：只要本模块有写操作成功返回（<400），就作废缓存，
+ * 下一个请求自然重载 —— 不用在每个 handler 里手写 invalidate，也不可能漏写。
+ * 幂等重放（命中 Idempotency-Key 直接回包）同样会触发失效，重复一次无害。
+ */
+rbac.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.on('finish', () => {
+      if (res.statusCode < 400) invalidatePolicyCache(`${req.method} ${req.originalUrl}`);
+    });
+  }
+  next();
+});
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const roleCode = z.string().trim().regex(/^[A-Z][A-Z0-9_]{1,49}$/, '角色编码只能是大写字母、数字、下划线，且以字母开头');
@@ -137,7 +157,7 @@ rbac.get('/users/me', run(async (_req, res) => {
        FROM sys_user u WHERE u.id = ?`,
     [userId]
   );
-  if (!rows.length) throw new ApiError(404, 20012, '用户不存在');
+  if (!rows.length) throw new ApiError(404, 20016, '用户不存在');
   const [roleRows] = await pool.query<RowDataPacket[]>(
     `SELECT r.id AS role_id, r.name, r.code
        FROM sys_user_role ur JOIN sys_role r ON r.id = ur.role_id
@@ -179,7 +199,7 @@ rbac.get('/users/me/permissions', run(async (req, res) => {
 const roleFields = `id AS role_id, name, code, description, status, created_at AS create_time, updated_at AS update_time`;
 
 /** GET /roles —— 角色列表（分页） */
-rbac.get('/roles', requirePermission('system:role:query'), run(async (req, res) => {
+rbac.get('/roles', requireAction('system:role', 'query'), run(async (req, res) => {
   const p = page(req.query, ['created_at', 'name', 'code']);
   reply(res, await list(
     pool,
@@ -200,7 +220,7 @@ const roleCreate = z.object({
 }).strict();
 
 /** POST /roles —— 新建角色（编码唯一，冲突返回 409/20015） */
-rbac.post('/roles', requirePermission('system:role:add'), run(async (req, res) => {
+rbac.post('/roles', requireAction('system:role', 'add'), run(async (req, res) => {
   const body = roleCreate.parse(req.body);
   await write(req, res, async (conn) => {
     const [dup] = await conn.query<RowDataPacket[]>('SELECT id FROM sys_role WHERE code = ?', [body.code]);
@@ -220,12 +240,12 @@ const roleUpdate = z.object({
 }).strict().refine((v) => Object.keys(v).length > 0, { message: '至少提供一个待修改字段' });
 
 /** PUT /roles/:id —— 改名称/描述/状态（不允许改 code，编码是前端与后端的约定） */
-rbac.put('/roles/:id', requirePermission('system:role:update'), run(async (req, res) => {
+rbac.put('/roles/:id', requireAction('system:role', 'update'), run(async (req, res) => {
   const roleId = id.parse(req.params.id);
   const body = roleUpdate.parse(req.body);
   await write(req, res, async (conn) => {
     const [rows] = await conn.query<RowDataPacket[]>('SELECT id, code FROM sys_role WHERE id = ? FOR UPDATE', [roleId]);
-    if (!rows.length) throw new ApiError(404, 20015, '角色不存在');
+    if (!rows.length) throw new ApiError(404, 20016, '角色不存在');
     if (rows[0].code === 'SUPER_ADMIN' && body.status === 'DISABLED') {
       throw new ApiError(409, 20015, '超级管理员角色不允许停用');
     }
@@ -240,11 +260,11 @@ rbac.put('/roles/:id', requirePermission('system:role:update'), run(async (req, 
 }));
 
 /** DELETE /roles/:id —— 内置角色与仍被引用的角色不允许删除 */
-rbac.delete('/roles/:id', requirePermission('system:role:delete'), run(async (req, res) => {
+rbac.delete('/roles/:id', requireAction('system:role', 'delete'), run(async (req, res) => {
   const roleId = id.parse(req.params.id);
   await write(req, res, async (conn) => {
     const [rows] = await conn.query<RowDataPacket[]>('SELECT id, code FROM sys_role WHERE id = ? FOR UPDATE', [roleId]);
-    if (!rows.length) throw new ApiError(404, 20015, '角色不存在');
+    if (!rows.length) throw new ApiError(404, 20016, '角色不存在');
     if (BUILTIN_ROLE_CODES.includes(rows[0].code)) throw new ApiError(409, 20015, '内置角色不允许删除');
     const [used] = await conn.query<RowDataPacket[]>('SELECT COUNT(*) AS cnt FROM sys_user_role WHERE role_id = ?', [roleId]);
     if (Number(used[0].cnt) > 0) throw new ApiError(409, 20015, '该角色下仍有用户，请先解除用户关联');
@@ -254,10 +274,10 @@ rbac.delete('/roles/:id', requirePermission('system:role:delete'), run(async (re
 }));
 
 /** GET /roles/:id/permissions —— 角色已分配的权限 id 列表（含祖先菜单，与 PUT 的入参口径一致） */
-rbac.get('/roles/:id/permissions', requirePermission('system:role:query'), run(async (req, res) => {
+rbac.get('/roles/:id/permissions', requireAction('system:role', 'query'), run(async (req, res) => {
   const roleId = id.parse(req.params.id);
   const [exists] = await pool.query<RowDataPacket[]>('SELECT id FROM sys_role WHERE id = ?', [roleId]);
-  if (!exists.length) throw new ApiError(404, 20015, '角色不存在');
+  if (!exists.length) throw new ApiError(404, 20016, '角色不存在');
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT rp.permission_id
        FROM sys_role_permission rp JOIN sys_permission p ON p.id = rp.permission_id
@@ -276,12 +296,12 @@ const rolePermissions = z.object({
  * PUT /roles/:id/permissions —— 全量覆盖式分配
  * 自动补齐父级菜单，避免出现「按钮已授权但父菜单没授权」导致前端菜单树断链。
  */
-rbac.put('/roles/:id/permissions', requirePermission('system:role:update'), run(async (req, res) => {
+rbac.put('/roles/:id/permissions', requireAction('system:role', 'update'), run(async (req, res) => {
   const roleId = id.parse(req.params.id);
   const body = rolePermissions.parse(req.body);
   await write(req, res, async (conn) => {
     const [roles] = await conn.query<RowDataPacket[]>('SELECT id, code FROM sys_role WHERE id = ? FOR UPDATE', [roleId]);
-    if (!roles.length) throw new ApiError(404, 20015, '角色不存在');
+    if (!roles.length) throw new ApiError(404, 20016, '角色不存在');
     if (roles[0].code === 'SUPER_ADMIN') throw new ApiError(403, 20013, '超级管理员为内置全量权限，不允许修改');
 
     const wanted = new Set<number>(body.permission_ids.map(Number));
@@ -317,7 +337,7 @@ rbac.put('/roles/:id/permissions', requirePermission('system:role:update'), run(
 // ---------------------------------------------------------------------------
 
 /** GET /permissions —— 全量权限树（菜单嵌套、按钮挂在所属菜单下），供角色分配页勾选 */
-rbac.get('/permissions', requirePermission('system:permission:query'), run(async (_req, res) => {
+rbac.get('/permissions', requireAction('system:permission', 'query'), run(async (_req, res) => {
   const rows = await loadPermissionRows();
   const tree = buildMenuTree(rows);
   const buttons = rows.filter((row) => row.resource_type === 'BUTTON');
@@ -354,7 +374,7 @@ const permissionCreate = z.object({
 });
 
 /** POST /permissions —— 新建菜单或按钮 */
-rbac.post('/permissions', requirePermission('system:permission:add'), run(async (req, res) => {
+rbac.post('/permissions', requireAction('system:permission', 'add'), run(async (req, res) => {
   const body = permissionCreate.parse(req.body);
   await write(req, res, async (conn) => {
     const [dup] = await conn.query<RowDataPacket[]>('SELECT id FROM sys_permission WHERE code = ?', [body.code]);
@@ -384,12 +404,12 @@ const permissionUpdate = z.object({
 }).strict().refine((v) => Object.keys(v).length > 0, { message: '至少提供一个待修改字段' });
 
 /** PUT /permissions/:id —— 改名称/路由/图标/排序/状态（code 与类型不允许改） */
-rbac.put('/permissions/:id', requirePermission('system:permission:update'), run(async (req, res) => {
+rbac.put('/permissions/:id', requireAction('system:permission', 'update'), run(async (req, res) => {
   const permissionId = id.parse(req.params.id);
   const body = permissionUpdate.parse(req.body);
   await write(req, res, async (conn) => {
     const [rows] = await conn.query<RowDataPacket[]>('SELECT id, resource_type FROM sys_permission WHERE id = ? FOR UPDATE', [permissionId]);
-    if (!rows.length) throw new ApiError(404, 20015, '权限资源不存在');
+    if (!rows.length) throw new ApiError(404, 20016, '权限资源不存在');
     if (rows[0].resource_type === 'BUTTON' && (body.path !== undefined || body.icon !== undefined)) {
       throw new ApiError(400, 10001, '按钮资源不支持 path / icon 字段');
     }
@@ -406,11 +426,11 @@ rbac.put('/permissions/:id', requirePermission('system:permission:update'), run(
 }));
 
 /** DELETE /permissions/:id —— 有子节点或仍被角色引用时拒绝，避免删出断链菜单 */
-rbac.delete('/permissions/:id', requirePermission('system:permission:delete'), run(async (req, res) => {
+rbac.delete('/permissions/:id', requireAction('system:permission', 'delete'), run(async (req, res) => {
   const permissionId = id.parse(req.params.id);
   await write(req, res, async (conn) => {
     const [rows] = await conn.query<RowDataPacket[]>('SELECT id FROM sys_permission WHERE id = ? FOR UPDATE', [permissionId]);
-    if (!rows.length) throw new ApiError(404, 20015, '权限资源不存在');
+    if (!rows.length) throw new ApiError(404, 20016, '权限资源不存在');
     const [children] = await conn.query<RowDataPacket[]>('SELECT COUNT(*) AS cnt FROM sys_permission WHERE parent_id = ?', [permissionId]);
     if (Number(children[0].cnt) > 0) throw new ApiError(409, 20015, '该资源下仍有子节点，请先删除子节点');
     const [used] = await conn.query<RowDataPacket[]>('SELECT COUNT(*) AS cnt FROM sys_role_permission WHERE permission_id = ?', [permissionId]);
@@ -430,7 +450,7 @@ const userSelect = `SELECT u.id AS user_id, u.nickname, u.phone, u.avatar_url, u
   FROM sys_user u`;
 
 /** GET /admin/users —— 用户列表（分页，可按状态筛选，带角色码数组） */
-rbac.get('/admin/users', requirePermission('system:user:query'), run(async (req, res) => {
+rbac.get('/admin/users', requireAction('system:user', 'query'), run(async (req, res) => {
   const p = page(req.query, ['created_at', 'id'], { status: z.enum(['ENABLED', 'DISABLED']).optional() });
   const where = p.status
     ? ` WHERE u.status = ${p.status === 'ENABLED' ? "'ACTIVE'" : "'DISABLED'"}`
@@ -478,7 +498,7 @@ async function assertRolesAssignable(conn: typeof pool | PoolConnection, roleIds
 }
 
 /** POST /admin/users —— 管理员建号并分配角色 */
-rbac.post('/admin/users', requirePermission('system:user:add'), run(async (req, res) => {
+rbac.post('/admin/users', requireAction('system:user', 'add'), run(async (req, res) => {
   const body = adminUserCreate.parse(req.body);
   const passwordHash = await hashPassword(body.password);
   await write(req, res, async (conn) => {
@@ -503,12 +523,12 @@ const adminUserUpdate = z.object({
 }).strict();
 
 /** PUT /admin/users/:id —— 改资料/启停用/全量覆盖角色（停用即踢下线） */
-rbac.put('/admin/users/:id', requirePermission('system:user:update'), run(async (req, res) => {
+rbac.put('/admin/users/:id', requireAction('system:user', 'update'), run(async (req, res) => {
   const userId = id.parse(req.params.id);
   const body = adminUserUpdate.parse(req.body);
   await write(req, res, async (conn) => {
     const [rows] = await conn.query<RowDataPacket[]>('SELECT id, phone FROM sys_user WHERE id = ? FOR UPDATE', [userId]);
-    if (!rows.length) throw new ApiError(404, 20015, '用户不存在');
+    if (!rows.length) throw new ApiError(404, 20016, '用户不存在');
     const roleIds = await assertRolesAssignable(conn, body.role_ids);
 
     const sets: string[] = [];
@@ -529,11 +549,11 @@ rbac.put('/admin/users/:id', requirePermission('system:user:update'), run(async 
 }));
 
 /** DELETE /admin/users/:id —— 不做物理删除（历史订单/行程仍引用该用户），改为停用 + 撤销会话 */
-rbac.delete('/admin/users/:id', requirePermission('system:user:delete'), run(async (req, res) => {
+rbac.delete('/admin/users/:id', requireAction('system:user', 'delete'), run(async (req, res) => {
   const userId = id.parse(req.params.id);
   await write(req, res, async (conn) => {
     const [rows] = await conn.query<RowDataPacket[]>('SELECT id FROM sys_user WHERE id = ? FOR UPDATE', [userId]);
-    if (!rows.length) throw new ApiError(404, 20015, '用户不存在');
+    if (!rows.length) throw new ApiError(404, 20016, '用户不存在');
     if (String(userId) === String(res.locals.user.id)) throw new ApiError(409, 20015, '不能停用当前登录的管理员账号');
     await conn.query("UPDATE sys_user SET status = 'DISABLED' WHERE id = ?", [userId]);
     await conn.query('UPDATE api_session SET is_revoked = 1 WHERE user_id = ?', [userId]);

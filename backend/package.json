@@ -7,11 +7,15 @@
     "build": "tsc",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
-    "test": "tsx --test src/api/api.test.ts",
-    "test:rbac": "tsx --test src/auth/rbac.test.ts"
+    "test": "tsx --test --test-force-exit src/api/api.test.ts",
+    "test:rbac": "tsx --test --test-force-exit src/auth/rbac.test.ts",
+    "test:auth": "tsx --test --test-force-exit src/auth/auth.test.ts",
+    "e2e:rbac": "tsx src/api/rbacRouter.e2e.ts",
+    "db:check": "tsx src/db/preflight.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "casbin": "^5.51.1",
     "compression": "^1.8.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

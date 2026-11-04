@@ -31,6 +31,8 @@ SHA256(JSON.stringify(请求体))
 
 PUT `/users/{id}` 完整资料字段为 nickname、avatar_url（可 null）、default_departure_city（可 null）。PATCH `/plans/{id}` 接受 title 和/或 instruction。评论体为 content、rating（1–5）。新增业务码：20014 限流、20015 重复资源或幂等键冲突、20016 防重放失败、50001 服务暂不可用。
 
+管理端与后台接口统一由 RBAC 授权：401 表示未登录或会话失效（业务码 20012），403 表示已登录但缺少权限（业务码 20013，文案固定「权限不足，禁止访问」），两者不得混用。判定由 Casbin 完成，路由上声明 `requireAction('模块:资源', '操作')`，权限数据来自 `sys_role`、`sys_permission`、`sys_role_permission`、`sys_user_role` 四张表；修改角色授权或用户角色后立即生效，无需重启服务。越权响应不回传缺失的权限码，只在服务端日志（`rbac.denied`）中留痕。详见 `docs/组员2-阶段二-Casbin授权层交付说明.md`。
+
 ## 部署及验证边界
 
 生产环境必须经可信 TLS 代理；配置 PUBLIC_API_ORIGIN 和 CORS_ORIGINS。仅在代理正确清除外部 forwarding headers 时设置 TRUST_PROXY=1；生产 HTTP 返回 308 并开启 HSTS。数据库连接使用 UTC，DECIMAL 和 BIGINT 保留字符串。请求 JSON 上限 64KB，开启 gzip，私有响应 no-store，网络请求超时 30 秒。

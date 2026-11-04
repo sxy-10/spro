@@ -5,20 +5,32 @@ import { app } from '../app.js';
 import { pool } from '../db/connection.js';
 import {
   matchPermission,
-  requirePermission,
+  requireAction,
+  requireAnyAction,
   requireAnyPermission,
+  requirePermission,
   requireRole,
   PERMISSION_DENIED_CODE,
   AUTH_REQUIRED_CODE
 } from './rbac.js';
+import { toPolicyRequest, toPolicyRules } from './permissionCode.js';
+import {
+  RBAC_MODEL_TEXT,
+  StaticPolicyAdapter,
+  evaluateRequests,
+  getEnforcer,
+  invalidatePolicyCache,
+  isAllowed,
+  setPolicyAdapter
+} from './casbin.js';
 
 /**
- * RBAC 授权层测试（组员2）
- * 覆盖三层：
- *   1. 权限码匹配规则（精确 / 通配）
- *   2. 守卫中间件的三态（未登录 401 / 无权限 403 / 有权限放行）
- *   3. 走真实 Express 链路：游客 403、旅行社管理员 200、无 token 401，响应包络与契约一致
- * 数据库全部用桩替换，测试不依赖本地 MySQL。
+ * RBAC / Casbin 授权层测试（组员2 · 阶段二）
+ * 覆盖四层：
+ *   1. 权限码 → Casbin (obj, act) 的折算口径（纯函数：菜单/按钮/通配/大小写）
+ *   2. Casbin 策略判定（静态策略适配器，不依赖 MySQL）
+ *   3. 守卫中间件的三态（未登录 401 / 无权限 403 / 有权限放行），含 requireAction 新写法
+ *   4. 走真实 Express 链路：游客 403、旅行社管理员 200、无 token 401，响应包络与契约一致
  */
 
 const TEST_SECRET = 'test-secret-with-at-least-32-characters';
@@ -31,6 +43,37 @@ const invoker = () => {
   return { next, error: () => captured };
 };
 
+/** 守卫是 async 的（要等 Casbin 判定），这里统一让出一个宏任务再取 next 的入参 */
+async function invoke(handler: any, req: any, res: any = fakeRes()): Promise<any> {
+  const { next, error } = invoker();
+  handler(req, res, next);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return error();
+}
+
+const shape = (request: { obj: string; act: string }) => ({ obj: request.obj, act: request.act });
+
+// ---------------------------------------------------------------------------
+// 1. 折算口径
+// ---------------------------------------------------------------------------
+
+test('权限码折算：菜单/按钮/通配统一落到 (obj, act)', () => {
+  assert.deepEqual(shape(toPolicyRequest('system:role:add')), { obj: 'system:role', act: 'add' });
+  assert.deepEqual(shape(toPolicyRequest('system:role')), { obj: 'system:role', act: 'view' }, '菜单只放行 view');
+  assert.deepEqual(shape(toPolicyRequest('system')), { obj: 'system', act: 'view' });
+  assert.deepEqual(shape(toPolicyRequest('system:role', 'query')), { obj: 'system:role', act: 'query' }, 'requireAction(module, action) 写法');
+  assert.deepEqual(shape(toPolicyRequest('System:Role', 'Query')), { obj: 'system:role', act: 'query' }, '大小写不应影响判定');
+  // 通配：keyMatch 是前缀通配，故一条通配码要下发两条策略才能覆盖整棵子树
+  assert.deepEqual(toPolicyRules('route:*').map(shape), [
+    { obj: 'route', act: '*' },
+    { obj: 'route:*', act: '*' }
+  ]);
+  assert.deepEqual(toPolicyRules('route:line:*').map(shape), [
+    { obj: 'route:line', act: '*' },
+    { obj: 'route:line:*', act: '*' }
+  ]);
+});
+
 test('权限码匹配：精确命中、通配授予、跨模块不误放行', () => {
   assert.equal(matchPermission('route:line:add', 'route:line:add'), true);
   assert.equal(matchPermission('route:line:add', 'route:line:query'), false);
@@ -39,65 +82,147 @@ test('权限码匹配：精确命中、通配授予、跨模块不误放行', ()
   assert.equal(matchPermission('route:line:add', '*'), true, '全量通配应放行一切');
   assert.equal(matchPermission('system:role:add', 'route:*'), false, '跨模块通配不得放行');
   assert.equal(matchPermission('systemx:role', 'system:*'), false, '前缀必须整段匹配，systemx 不算 system');
+  assert.equal(matchPermission('system:role:query', 'system:role'), false, '菜单授权不得放大成按钮操作');
   assert.equal(matchPermission('Route:Line:Add', 'route:line:add'), true, '大小写不应影响判定');
 });
 
-test('守卫：未登录请求返回 401 + 20012', () => {
-  const handler = requirePermission('system:role:add');
-  const { next, error } = invoker();
-  handler({ originalUrl: '/v1/admin/roles' } as any, fakeRes(), next as any);
-  const err = error();
-  assert.equal(err.status, 401);
-  assert.equal(err.code, AUTH_REQUIRED_CODE);
+// ---------------------------------------------------------------------------
+// 2. Casbin 策略判定（静态策略，不连库）
+// ---------------------------------------------------------------------------
+
+test('Casbin：角色 → 权限命中放行，未授予的操作拒绝', async () => {
+  setPolicyAdapter(new StaticPolicyAdapter([
+    'p, AGENCY_ADMIN, route:line, query',
+    'p, AGENCY_ADMIN, route:line, add',
+    'p, TOURIST, system:role, view'
+  ]));
+  // permissions 故意留空：证明放行来自 Casbin 策略，而不是登录时聚合的快照
+  const agency = { id: '2', roles: ['AGENCY_ADMIN'], permissions: [] };
+  assert.equal(await isAllowed(agency, toPolicyRequest('route:line', 'query')), true);
+  assert.equal(await isAllowed(agency, toPolicyRequest('route:line', 'add')), true);
+  assert.equal(await isAllowed(agency, toPolicyRequest('route:line', 'delete')), false, '策略里没有 delete');
+
+  const tourist = { id: '3', roles: ['TOURIST'], permissions: [] };
+  assert.equal(await isAllowed(tourist, toPolicyRequest('system:role')), true, '菜单 view 放行');
+  assert.equal(await isAllowed(tourist, toPolicyRequest('system:role', 'query')), false, '菜单授权不得放大成按钮操作');
 });
 
-test('守卫：已登录但缺权限返回 403 + 20013 + 统一文案', () => {
-  const handler = requirePermission('system:role:add');
-  const { next, error } = invoker();
-  const req = { originalUrl: '/v1/admin/roles', user: { id: '1', roles: ['TOURIST'], permissions: ['route:line:query'] } } as any;
-  handler(req, fakeRes(), next as any);
-  const err = error();
-  assert.equal(err.status, 403);
-  assert.equal(err.code, PERMISSION_DENIED_CODE);
-  assert.equal(err.message, '权限不足，禁止访问');
+test('Casbin：g 规则按用户 ID 绑定角色，通配策略覆盖整棵子树', async () => {
+  setPolicyAdapter(new StaticPolicyAdapter([
+    'p, AGENCY_ADMIN, route:line, query',
+    'p, SUPER_ADMIN, *, *',
+    'g, 42, AGENCY_ADMIN'
+  ]));
+
+  // roles 留空：只靠数据库里的 g 规则（sys_user_role）命中角色，验证角色继承真的生效
+  const bound = { id: '42', roles: [], permissions: [] };
+  assert.equal(await isAllowed(bound, toPolicyRequest('route:line', 'query')), true);
+  assert.equal(await isAllowed(bound, toPolicyRequest('route:line', 'delete')), false);
+  assert.equal(
+    await isAllowed({ id: '99', roles: [], permissions: [] }, toPolicyRequest('route:line', 'query')),
+    false,
+    '没有 g 规则、也不是该角色 → 拒绝'
+  );
+
+  const superAdmin = { id: '1', roles: ['SUPER_ADMIN'], permissions: [] };
+  assert.equal(await isAllowed(superAdmin, toPolicyRequest('system:permission', 'delete')), true, '通配策略应放行任意模块');
 });
 
-test('守卫：持有全部所需权限才放行，缺一即拒', () => {
-  const req = { originalUrl: '/v1/admin/roles', user: { id: '1', roles: ['AGENCY_ADMIN'], permissions: ['system:role:query', 'system:role:export'] } } as any;
-  const pass = invoker();
-  requirePermission('system:role:query')(req, fakeRes(), pass.next as any);
-  assert.equal(pass.error(), undefined);
+test('Casbin：策略表为空时退回权限快照，结论与策略路径一致', async () => {
+  setPolicyAdapter(new StaticPolicyAdapter([]));
+  const user = { id: '7', roles: ['TOURIST'], permissions: ['route:line:query'] };
 
-  const deny = invoker();
-  requirePermission('system:role:query', 'system:role:add')(req, fakeRes(), deny.next as any);
-  assert.equal(deny.error()?.status, 403);
+  const allow = await evaluateRequests(user, [toPolicyRequest('route:line', 'query')]);
+  assert.equal(allow.allowed, true);
+  assert.equal(allow.engine, 'snapshot', '策略为空必须降级到快照，不能把所有人一刀切拒掉');
+
+  const deny = await evaluateRequests(user, [toPolicyRequest('route:line', 'add')]);
+  assert.equal(deny.allowed, false);
+  assert.deepEqual(deny.missing, ['route:line:add']);
 });
 
-test('守卫：任意权限模式与角色模式', () => {
-  const req = { originalUrl: '/v1/roles/1', user: { id: '2', roles: ['AGENCY_ADMIN'], permissions: ['route:line:update'] } } as any;
-
-  const anyPass = invoker();
-  requireAnyPermission('route:line:update', 'route:line:add')(req, fakeRes(), anyPass.next as any);
-  assert.equal(anyPass.error(), undefined);
-
-  const anyDeny = invoker();
-  requireAnyPermission('system:role:add', 'system:role:delete')(req, fakeRes(), anyDeny.next as any);
-  assert.equal(anyDeny.error()?.status, 403);
-
-  const rolePass = invoker();
-  requireRole('AGENCY_ADMIN', 'SUPER_ADMIN')(req, fakeRes(), rolePass.next as any);
-  assert.equal(rolePass.error(), undefined);
-
-  const roleDeny = invoker();
-  requireRole('SUPER_ADMIN')(req, fakeRes(), roleDeny.next as any);
-  assert.equal(roleDeny.error()?.status, 403);
+test('Casbin：多条要求支持 all / any 两种模式', async () => {
+  setPolicyAdapter(new StaticPolicyAdapter(['p, AGENCY_ADMIN, route:line, query']));
+  const user = { id: '2', roles: ['AGENCY_ADMIN'], permissions: [] };
+  const all = await evaluateRequests(user, [toPolicyRequest('route:line', 'query'), toPolicyRequest('route:line', 'add')], 'all');
+  assert.equal(all.allowed, false);
+  const any = await evaluateRequests(user, [toPolicyRequest('route:line', 'query'), toPolicyRequest('route:line', 'add')], 'any');
+  assert.equal(any.allowed, true);
 });
+
+test('Casbin：模型必须同时具备 role_definition 与 keyMatch 通配', async () => {
+  // 模型是判定的根：少一条语义都会让某类授权静默失效，所以直接对模型文本断言
+  assert.match(RBAC_MODEL_TEXT, /^g = _, _$/m, '缺少 role_definition → 角色继承静默失效');
+  assert.match(RBAC_MODEL_TEXT, /g\(r\.sub, p\.sub\)/, '映射里没接 g() → 角色继承不参与判定');
+  assert.match(RBAC_MODEL_TEXT, /keyMatch\(r\.obj, p\.obj\)/, '缺少 keyMatch → 通配授权静默失效');
+  assert.match(RBAC_MODEL_TEXT, /p\.act == "\*"/, '缺少 act 通配 → SUPER_ADMIN 这类全量授权无法表达');
+
+  // 引擎真的按这份模型跑起来了：策略命中即放行
+  setPolicyAdapter(new StaticPolicyAdapter(['p, SUPER_ADMIN, *, *']));
+  const enforcer = await getEnforcer();
+  assert.equal(await enforcer.enforce('SUPER_ADMIN', 'system:permission', 'delete'), true);
+});
+
+// ---------------------------------------------------------------------------
+// 3. 守卫三态
+// ---------------------------------------------------------------------------
+
+test('守卫：未登录请求返回 401 + 20012', async () => {
+  setPolicyAdapter(new StaticPolicyAdapter(['p, AGENCY_ADMIN, system:role, add']));
+  const error = await invoke(requireAction('system:role', 'add'), { originalUrl: '/v1/roles' });
+  assert.equal(error.status, 401);
+  assert.equal(error.code, AUTH_REQUIRED_CODE);
+});
+
+test('守卫：已登录但缺权限返回 403 + 20013 + 统一文案', async () => {
+  setPolicyAdapter(new StaticPolicyAdapter(['p, TOURIST, route:line, query']));
+  const req = { originalUrl: '/v1/admin/roles', user: { id: '1', roles: ['TOURIST'], permissions: ['route:line:query'] } };
+  const error = await invoke(requirePermission('system:role:add'), req);
+  assert.equal(error.status, 403);
+  assert.equal(error.code, PERMISSION_DENIED_CODE);
+  assert.equal(error.message, '权限不足，禁止访问');
+});
+
+test('守卫：持有全部所需权限才放行，缺一即拒', async () => {
+  setPolicyAdapter(new StaticPolicyAdapter([
+    'p, AGENCY_ADMIN, system:role, query',
+    'p, AGENCY_ADMIN, system:role, export'
+  ]));
+  const req = { originalUrl: '/v1/admin/roles', user: { id: '1', roles: ['AGENCY_ADMIN'], permissions: [] } };
+  assert.equal(await invoke(requirePermission('system:role:query'), req), undefined);
+  assert.equal(await invoke(requirePermission('system:role:query', 'system:role:export'), req), undefined);
+  assert.equal((await invoke(requirePermission('system:role:query', 'system:role:add'), req))?.status, 403);
+});
+
+test('守卫：任意权限模式、任意操作模式与角色模式', async () => {
+  setPolicyAdapter(new StaticPolicyAdapter(['p, AGENCY_ADMIN, route:line, update']));
+  const req = { originalUrl: '/v1/roles/1', user: { id: '2', roles: ['AGENCY_ADMIN'], permissions: [] } };
+
+  assert.equal(await invoke(requireAnyPermission('route:line:update', 'route:line:add'), req), undefined);
+  assert.equal((await invoke(requireAnyPermission('system:role:add', 'system:role:delete'), req))?.status, 403);
+  assert.equal(await invoke(requireAnyAction(['route:line', 'update'], ['route:line', 'add']), req), undefined);
+  assert.equal(await invoke(requireRole('AGENCY_ADMIN', 'SUPER_ADMIN'), req), undefined);
+  assert.equal((await invoke(requireRole('SUPER_ADMIN'), req))?.status, 403);
+});
+
+// ---------------------------------------------------------------------------
+// 4. 真实 HTTP 链路
+// ---------------------------------------------------------------------------
 
 test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async () => {
   const persona = { role: 'TOURIST', permissions: [] as string[], roles: ['TOURIST'] };
+  setPolicyAdapter(null); // 恢复 MySQL 适配器（下面的桩函数会喂它真数据）
 
   const originalQuery = pool.query;
   (pool as any).query = async (sql: string) => {
+    // Casbin 适配器 g 规则（用户 → 角色）
+    if (sql.includes('AS role_code') && sql.includes('FROM sys_user_role ur')) {
+      return [persona.roles.map((code) => ({ user_id: '1', role_code: code }))];
+    }
+    // Casbin 适配器 p 规则（角色 → 权限）
+    if (sql.includes('AS permission_code')) {
+      return [persona.permissions.map((code) => ({ role_code: persona.roles[0] ?? 'TOURIST', permission_code: code }))];
+    }
     if (sql.includes('api_rate_limit')) return [sql.trim().startsWith('SELECT') ? [{ hits: 1 }] : {}];
     if (sql.includes('JOIN sys_user u')) {
       return [[{ id: 1, phone: '13900000001', role: persona.role, agency_id: 1, status: 'ACTIVE' }]];
@@ -140,14 +265,20 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
     });
     return { status: response.status, body: (await response.json()) as any };
   };
+  /** 切身份后必须作废策略缓存，否则要等 TTL 才生效（生产由 rbacRouter 的写操作钩子负责） */
+  const switchPersona = (next: { role: string; roles: string[]; permissions: string[] }) => {
+    Object.assign(persona, next);
+    invalidatePolicyCache('test:persona');
+  };
 
   try {
-    // 1. 无 token → 401，包络符合契约
+    // 1. 无 token → 401 + 20012（契约硬要求：401 必须与 403/20013 区分开）
     const anonymous = await call('/admin/routes', false);
     assert.equal(anonymous.status, 401);
+    assert.equal(anonymous.body.code, AUTH_REQUIRED_CODE, '未登录业务码必须是 20012，不能与 403/20013 撞码');
 
     // 2. 游客（无任何按钮权限）→ 403 + 20013
-    persona.role = 'TOURIST'; persona.roles = ['TOURIST']; persona.permissions = [];
+    switchPersona({ role: 'TOURIST', roles: ['TOURIST'], permissions: [] });
     const denied = await call('/admin/routes');
     assert.equal(denied.status, 403);
     assert.equal(denied.body.code, PERMISSION_DENIED_CODE);
@@ -155,7 +286,7 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
     assert.deepEqual(Object.keys(denied.body).sort(), ['code', 'data', 'message', 'trace_id']);
 
     // 3. 旅行社管理员持有 route:line:query → 放行（关键：不再依赖 sys_user.role = 'ADMIN'）
-    persona.role = 'TOURIST'; persona.roles = ['AGENCY_ADMIN']; persona.permissions = ['route:line:query', 'order:manage:query'];
+    switchPersona({ role: 'TOURIST', roles: ['AGENCY_ADMIN'], permissions: ['route:line:query', 'order:manage:query'] });
     const allowed = await call('/admin/routes');
     assert.equal(allowed.status, 200);
     assert.equal(allowed.body.code, 0);
@@ -169,7 +300,7 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
     assert.equal(rolesDenied.body.code, PERMISSION_DENIED_CODE);
 
     // 6. 补上 system:role:query 后可读角色列表（验证路由挂载与列表包络）
-    persona.permissions = ['system:role', 'system:role:query'];
+    switchPersona({ role: 'TOURIST', roles: ['AGENCY_ADMIN'], permissions: ['system:role', 'system:role:query'] });
     const rolesAllowed = await call('/roles');
     assert.equal(rolesAllowed.status, 200);
     assert.equal(rolesAllowed.body.data.total, 2);
@@ -184,12 +315,13 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
     assert.deepEqual(myPermissions.body.data.buttons, []);
 
     // 8. 游客无任何权限时，权限接口返回空结构而不是 403（前端据此只渲染公开页）
-    persona.permissions = [];
+    switchPersona({ role: 'TOURIST', roles: ['TOURIST'], permissions: [] });
     const emptyPermissions = await call('/users/me/permissions');
     assert.equal(emptyPermissions.status, 200);
     assert.deepEqual(emptyPermissions.body.data, { menus: [], buttons: [] });
   } finally {
     (pool as any).query = originalQuery;
+    setPolicyAdapter(null);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
