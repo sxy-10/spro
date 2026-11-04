@@ -45,13 +45,13 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
 }
 async function verifyUser(req: Request, res: Response) {
   const token = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
-  if (!token) throw new ApiError(401, 20013, '请先登录');
+  if (!token) throw new ApiError(401, 20012, '请先登录');
   let payload: jwt.JwtPayload;
   try { payload = jwt.verify(token, secret(), { algorithms: ['HS256'], issuer: 'travel-agent', audience: 'travel-client' }) as jwt.JwtPayload; }
-  catch { throw new ApiError(401, 20013, '登录已失效'); }
+  catch { throw new ApiError(401, 20012, '登录已失效'); }
   const [rows] = await pool.query<RowDataPacket[]>(`SELECT u.id,u.role,u.agency_id FROM api_session s JOIN sys_user u ON u.id=s.user_id
     WHERE s.session_id=? AND s.user_id=? AND s.is_revoked=0 AND s.expires_at>UTC_TIMESTAMP() AND u.status='ACTIVE'`, [payload.jti, payload.sub]);
-  if (!rows.length) throw new ApiError(401, 20013, '登录已失效');
+  if (!rows.length) throw new ApiError(401, 20012, '登录已失效');
   res.locals.user = rows[0]; res.locals.sessionId = payload.jti;
 }
 export function page(query: unknown, sorts: string[], filters: Record<string, z.ZodType> = {}) {

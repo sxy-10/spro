@@ -44,7 +44,8 @@ api.post('/auth/login', run(async (req, res) => {
   const valid = await verifyPasswordConstantTime(body.password, rows[0]?.password_hash);
   if (!rows.length || !valid) {
     await recordLoginFailure(body.mobile);
-    throw new ApiError(401, 20013, '手机号或密码错误');
+    // 契约：/auth/login 400 → 10001「手机号或密码错误」（不能用 401/20012，那是"未登录"的语义）
+    throw new ApiError(400, 10001, '手机号或密码错误');
   }
   await clearLoginLockout(body.mobile);
   const userId = String(rows[0].id), sessionId = randomUUID();
@@ -63,7 +64,7 @@ api.get('/routes', run(async (req, res) => {
 }));
 api.get('/routes/:id', run(async (req, res) => {
   const [rows] = await pool.query<RowDataPacket[]>(`SELECT ${routeFields},description FROM travel_product WHERE id=? AND status='ON_SALE'`, [id.parse(req.params.id)]);
-  if (!rows.length) throw new ApiError(404, 20012, '线路不存在');
+  if (!rows.length) throw new ApiError(404, 20016, '线路不存在');
   reply(res, rows[0]);
 }));
 api.get('/routes/:id/stock', run(async (req, res) => {
@@ -71,7 +72,7 @@ api.get('/routes/:id/stock', run(async (req, res) => {
   const query=z.object({travel_date:travelDate}).strict().parse(req.query);
   res.setHeader('Cache-Control','no-store');
   const [routes]=await pool.query<RowDataPacket[]>(`SELECT id FROM travel_product WHERE id=? AND status='ON_SALE'`,[routeId]);
-  if(!routes.length) throw new ApiError(404,20012,'线路不存在或已下架');
+  if(!routes.length) throw new ApiError(404,20016,'线路不存在或已下架');
   const [rows]=await pool.query<RowDataPacket[]>(`SELECT total_seats,total_seats-locked_seats-sold_seats AS available_seats
     FROM route_stock WHERE route_id=? AND travel_date=?`,[routeId,query.travel_date]);
   const stock=rows[0] ?? {total_seats:0,available_seats:0};
@@ -119,7 +120,7 @@ const planInput = z.object({ destination: text(50), start_date: utc, end_date: u
 async function ownedPlan(conn: typeof pool | PoolConnection, planId: unknown, userId: string, lock=false) {
   const no = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/).parse(planId);
   const [rows] = await conn.query<RowDataPacket[]>(`SELECT * FROM itinerary WHERE itinerary_no=? AND user_id=? AND is_deleted=0${lock?' FOR UPDATE':''}`, [no,userId]);
-  if (!rows.length) throw new ApiError(404,20012,'行程不存在');
+  if (!rows.length) throw new ApiError(404,20016,'行程不存在');
   return rows[0];
 }
 async function planDetail(conn: typeof pool | PoolConnection, row: RowDataPacket) {
@@ -182,7 +183,7 @@ api.post('/orders',run(async(req,res)=>{
   const body=z.object({route_id:id,travel_date:travelDate,people_count:z.number().int().min(1).max(100),contact_mobile:mobile}).strict().parse(req.body);
   await write(req,res,async conn=>{
     const [routes]=await conn.query<RowDataPacket[]>('SELECT id,base_price_rmb FROM travel_product WHERE id=? AND status=\'ON_SALE\' FOR UPDATE',[body.route_id]);
-    if(!routes.length) throw new ApiError(404,20012,'线路不存在或已下架');
+    if(!routes.length) throw new ApiError(404,20016,'线路不存在或已下架');
     const cents=BigInt(String(routes[0].base_price_rmb).replace('.',''))*BigInt(body.people_count);
     if(cents>999999999999n) throw new ApiError(400,10002,'订单金额超出允许范围');
     await lockSeats(conn,body.route_id,body.travel_date,body.people_count);
@@ -201,14 +202,14 @@ api.get('/orders',run(async(req,res)=>{
 }));
 api.get('/orders/:id',run(async(req,res)=>{
   const [rows]=await pool.query<RowDataPacket[]>(`SELECT ${orderFields},contact_phone FROM tour_order WHERE id=? AND user_id=?`,[id.parse(req.params.id),res.locals.user.id]);
-  if(!rows.length) throw new ApiError(404,20012,'订单不存在');
+  if(!rows.length) throw new ApiError(404,20016,'订单不存在');
   const {contact_phone,...order}=rows[0]; reply(res,{...order,contact_mobile:maskMobile(contact_phone)});
 }));
 api.post('/orders/:id/cancel',run(async(req,res)=>{
   const orderId=id.parse(req.params.id); z.object({}).strict().parse(req.body);
   await write(req,res,async conn=>{
     const [rows]=await conn.query<RowDataPacket[]>('SELECT * FROM tour_order WHERE id=? AND user_id=? FOR UPDATE',[orderId,res.locals.user.id]);
-    if(!rows.length) throw new ApiError(404,20012,'订单不存在');
+    if(!rows.length) throw new ApiError(404,20016,'订单不存在');
     if(rows[0].status!=='PENDING') throw new ApiError(409,20011,'订单当前状态不允许取消');
     await releaseSeats(conn,rows[0]);
     await conn.query(`UPDATE tour_order SET status='CANCELLED',cancelled_at=UTC_TIMESTAMP(),is_stock_locked=0 WHERE id=?`,[orderId]);
@@ -220,7 +221,7 @@ api.post('/spots/:id/comments',run(async(req,res)=>{
   const body=z.object({content:text(2000),rating:z.number().int().min(1).max(5)}).strict().parse(req.body);
   await write(req,res,async conn=>{
     const [spots]=await conn.query<RowDataPacket[]>(`SELECT id FROM poi WHERE id=? AND poi_type='ATTRACTION' AND status='ACTIVE'`,[spotId]);
-    if(!spots.length) throw new ApiError(404,20012,'景点不存在');
+    if(!spots.length) throw new ApiError(404,20016,'景点不存在');
     await conn.query('INSERT INTO spot_comment(spot_id,user_id,content,rating) VALUES (?,?,?,?)',[spotId,res.locals.user.id,body.content,body.rating]);
     const [rows]=await conn.query<RowDataPacket[]>('SELECT CAST(LAST_INSERT_ID() AS CHAR) AS comment_id');
     return {data:{...rows[0],spot_id:spotId,...body},status:201};

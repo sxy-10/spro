@@ -135,7 +135,7 @@ export const authenticateJwt = (req: Request, res: Response, next: NextFunction)
     }
     if (!user) {
       const failureMessage = info?.message || '请先登录';
-      return next(new ApiError(401, 20013, failureMessage));
+      return next(new ApiError(401, 20012, failureMessage));
     }
 
     // 同时赋给 req.user（Passport 规范）和 res.locals（已有接口兼容）

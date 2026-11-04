@@ -30,7 +30,7 @@ export async function settlePaidOrder(orderId: string): Promise<void> {
     const [rows] = await conn.query<RowDataPacket[]>(`SELECT *,expires_at<=UTC_TIMESTAMP() AS is_expired
       FROM tour_order WHERE id=? FOR UPDATE`,[orderId]);
     const order=rows[0];
-    if (!order) throw new ApiError(404,20012,'订单不存在');
+    if (!order) throw new ApiError(404,20016,'订单不存在');
     if (order.status === 'PAID') { await conn.commit(); return; }
     if (order.status !== 'PENDING' || !order.is_stock_locked || order.is_expired) throw new ApiError(409,20011,'订单当前状态不允许支付');
     await releaseSeats(conn,order,true);
