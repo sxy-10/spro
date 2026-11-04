@@ -11,6 +11,7 @@ import { travelDate, lockSeats, releaseSeats } from './stock.js';
 import { ApiError, id, mobile, utc, money, reply, run, page, list, write, secret, maskMobile, rateLimit, serialize } from './core.js';
 import { authenticateJwt } from '../auth/passport.js';
 import { requirePermission } from '../auth/rbac.js';
+import { rbac } from './rbacRouter.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
 
 export const api = Router();
@@ -84,6 +85,8 @@ api.get('/spots', run(async (req, res) => {
 
 api.use(authenticateJwt);
 api.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store'); rateLimit(`user:${res.locals.user.id}`, 90).then(() => next(), next); });
+// RBAC 管理接口（角色/权限/当前用户），见 api/rbacRouter.ts
+api.use(rbac);
 api.post('/auth/logout', run(async (req, res) => {
   await write(req, res, async conn => {
     await conn.query('UPDATE api_session SET is_revoked=1 WHERE session_id=?', [res.locals.sessionId]);

@@ -102,15 +102,29 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
     if (sql.includes('JOIN sys_user u')) {
       return [[{ id: 1, phone: '13900000001', role: persona.role, agency_id: 1, status: 'ACTIVE' }]];
     }
-    if (sql.includes('sys_role_permission')) {
+    if (sql.includes('sys_role_permission') && !sql.includes('AS user_count')) {
       return [persona.permissions.map((code) => ({ code }))];
     }
-    if (sql.includes('FROM sys_user_role ur')) {
+    if (sql.includes('FROM sys_user_role ur') && !sql.includes('user_count')) {
       return [persona.roles.map((code) => ({ code }))];
     }
     if (sql.includes('COUNT(*) total FROM travel_product')) return [[{ total: 0 }]];
     if (sql.includes('FROM travel_product')) return [[]];
     if (sql.includes('FROM tour_order')) return [[{ order_count: 0, paid_order_count: 0 }]];
+    if (sql.includes('COUNT(*) total FROM sys_role')) return [[{ total: 2 }]];
+    if (sql.includes('FROM sys_role')) {
+      return [[
+        { role_id: '1', name: '游客', code: 'TOURIST', description: null, status: 'ENABLED', create_time: '2026-11-01T00:00:00Z', update_time: '2026-11-01T00:00:00Z', user_count: 1, permission_count: 0 },
+        { role_id: '2', name: '旅行社管理员', code: 'AGENCY_ADMIN', description: null, status: 'ENABLED', create_time: '2026-11-01T00:00:00Z', update_time: '2026-11-01T00:00:00Z', user_count: 0, permission_count: 12 }
+      ]];
+    }
+    if (sql.includes('FROM sys_permission')) {
+      return [[
+        { permission_id: '10', parent_id: null, name: '系统管理', code: 'system', resource_type: 'MENU', path: '/admin', icon: 'setting', sort: 1, status: 'ENABLED' },
+        { permission_id: '11', parent_id: '10', name: '角色管理', code: 'system:role', resource_type: 'MENU', path: '/admin/roles', icon: null, sort: 1, status: 'ENABLED' },
+        { permission_id: '101', parent_id: '11', name: '新增角色', code: 'system:role:add', resource_type: 'BUTTON', path: null, icon: null, sort: 1, status: 'ENABLED' }
+      ]];
+    }
     throw new Error(`Unexpected SQL in rbac test: ${sql}`);
   };
 
@@ -148,6 +162,32 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
 
     // 4. 同一身份访问 analytics 也应有权限（order:manage:query）
     assert.equal((await call('/admin/analytics')).status, 200);
+
+    // 5. RBAC 管理接口同样受权限码保护：无 system:role:query 时 403
+    const rolesDenied = await call('/roles');
+    assert.equal(rolesDenied.status, 403);
+    assert.equal(rolesDenied.body.code, PERMISSION_DENIED_CODE);
+
+    // 6. 补上 system:role:query 后可读角色列表（验证路由挂载与列表包络）
+    persona.permissions = ['system:role', 'system:role:query'];
+    const rolesAllowed = await call('/roles');
+    assert.equal(rolesAllowed.status, 200);
+    assert.equal(rolesAllowed.body.data.total, 2);
+    assert.equal(rolesAllowed.body.data.list[1].code, 'AGENCY_ADMIN');
+
+    // 7. 前端权限接口：只有 system:role 这一支时，菜单树只暴露 system → system:role
+    const myPermissions = await call('/users/me/permissions');
+    assert.equal(myPermissions.status, 200);
+    assert.equal(myPermissions.body.data.menus.length, 1);
+    assert.equal(myPermissions.body.data.menus[0].code, 'system');
+    assert.equal(myPermissions.body.data.menus[0].children[0].code, 'system:role');
+    assert.deepEqual(myPermissions.body.data.buttons, []);
+
+    // 8. 游客无任何权限时，权限接口返回空结构而不是 403（前端据此只渲染公开页）
+    persona.permissions = [];
+    const emptyPermissions = await call('/users/me/permissions');
+    assert.equal(emptyPermissions.status, 200);
+    assert.deepEqual(emptyPermissions.body.data, { menus: [], buttons: [] });
   } finally {
     (pool as any).query = originalQuery;
     await new Promise<void>((resolve) => server.close(() => resolve()));
