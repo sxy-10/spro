@@ -10,6 +10,7 @@ import { generateUlid } from '../db/repository.js';
 import { travelDate, lockSeats, releaseSeats } from './stock.js';
 import { ApiError, id, mobile, utc, money, reply, run, page, list, write, secret, maskMobile, rateLimit, serialize } from './core.js';
 import { authenticateJwt } from '../auth/passport.js';
+import { requirePermission } from '../auth/rbac.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
 
 export const api = Router();
@@ -223,15 +224,14 @@ api.post('/spots/:id/comments',run(async(req,res)=>{
   });
 }));
 
-api.use('/admin',(req,res,next)=>{
-  if(res.locals.user.role!=='ADMIN') { next(new ApiError(403,20013,'仅管理员可访问')); return; } next();
-});
-api.get('/admin/routes',run(async(req,res)=>{
+// 管理端统一由 RBAC 权限码守卫：不再硬编码角色判断，权限来源改为 sys_user_role → sys_role_permission
+// 数据级隔离（agency_id）仍由各 handler 自行按 res.locals.user.agency_id 收口
+api.get('/admin/routes', requirePermission('route:line:query'), run(async(req,res)=>{
   const p=page(req.query,['created_at','base_price_rmb']);
   const where='FROM travel_product WHERE agency_id=?';
   reply(res,await list(pool,`SELECT ${routeFields} ${where}`,`SELECT COUNT(*) total ${where}`,[res.locals.user.agency_id],p));
 }));
-api.post('/admin/routes',run(async(req,res)=>{
+api.post('/admin/routes', requirePermission('route:line:add'), run(async(req,res)=>{
   const body=z.object({title:text(100),destination:text(100),default_days:z.number().int().min(1).max(30),style_tag:text(30),base_price_rmb:money}).strict().parse(req.body);
   await write(req,res,async conn=>{
     const no=generateUlid();
@@ -240,7 +240,7 @@ api.post('/admin/routes',run(async(req,res)=>{
     return {data:rows[0],status:201};
   });
 }));
-api.get('/admin/analytics',run(async(_req,res)=>{
+api.get('/admin/analytics', requirePermission('order:manage:query'), run(async(_req,res)=>{
   const [rows]=await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS order_count,SUM(status='PAID') AS paid_order_count FROM tour_order WHERE product_id IN (SELECT id FROM travel_product WHERE agency_id=?)`,[res.locals.user.agency_id]);
   reply(res,rows[0]);
 }));

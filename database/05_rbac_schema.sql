@@ -62,8 +62,8 @@ CREATE TABLE sys_permission (
   UNIQUE KEY uk_permission_code (code),
   KEY idx_permission_parent (parent_id),
   KEY idx_permission_type_status (resource_type, status),
-  -- 注：parent_id 参与 CHECK 语义的姊妹约束见 chk_permission_button_code，
-  --     MySQL 3823 限制下自关联外键统一用 NO ACTION（等效 RESTRICT）
+  -- 注：自关联外键用 NO ACTION（默认行为，等效 RESTRICT）：
+  --     删父节点前必须先处理子节点，避免一次误删把整棵权限子树连带删掉
   CONSTRAINT fk_permission_parent FOREIGN KEY (parent_id) REFERENCES sys_permission (id)
     ON DELETE NO ACTION ON UPDATE NO ACTION,
   -- 按钮必须带「模块:资源:操作」三段式编码；顶层模块（单段）不允许是 BUTTON
