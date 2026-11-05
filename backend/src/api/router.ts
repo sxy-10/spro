@@ -57,6 +57,122 @@ api.post('/auth/login', run(async (req, res) => {
   }, false);
 }));
 
+// 手机号短信登录
+api.post('/auth/login/sms', run(async (req, res) => {
+    const body = z.object({ mobile, sms_code: z.string().length(6) }).strict().parse(req.body);
+    await rateLimit(`auth:${req.ip}`, 10);
+    await checkLoginLockout(body.mobile);
+
+    // TODO: 对接真实短信服务后，替换为从 Redis/数据库校验真实验证码
+    // 当前开发环境：验证码统一为 123456
+    if (body.sms_code !== '123456') {
+        await recordLoginFailure(body.mobile);
+        throw new ApiError(400, 10001, '验证码错误或已过期');
+    }
+
+    const [rows] = await pool.query<RowDataPacket[]>('SELECT id FROM sys_user WHERE phone=? AND status=\'ACTIVE\'', [body.mobile]);
+    if (!rows.length) {
+        await recordLoginFailure(body.mobile);
+        throw new ApiError(400, 10001, '该手机号尚未注册，请先注册');
+    }
+
+    await clearLoginLockout(body.mobile);
+    const userId = String(rows[0].id), sessionId = randomUUID();
+    const token = jwt.sign({}, secret(), { algorithm: 'HS256', subject: userId, jwtid: sessionId, expiresIn: '30m', issuer: 'travel-agent', audience: 'travel-client' });
+
+    await write(req, res, async conn => {
+        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
+        await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
+        return { data: { token, user_id: userId } };
+    }, false);
+}));
+
+// 重置密码（防枚举：不暴露用户是否存在）
+api.post('/auth/reset-password', run(async (req, res) => {
+    const body = z.object({ mobile, sms_code: z.string().length(6), new_password: z.string().min(8).max(72) }).strict().parse(req.body);
+    await rateLimit(`auth:${req.ip}`, 10);
+
+    // TODO: 对接真实短信服务后，替换为从 Redis/数据库校验真实验证码
+    // 当前开发环境：验证码统一为 123456
+    if (body.sms_code !== '123456') {
+        throw new ApiError(400, 10001, '验证码错误或已过期');
+    }
+
+    // 防枚举：查询用户，无论是否存在都返回成功
+    const [rows] = await pool.query<RowDataPacket[]>('SELECT id FROM sys_user WHERE phone=?', [body.mobile]);
+
+    if (rows.length > 0) {
+        const newPasswordHash = await hashPassword(body.new_password);
+        await write(req, res, async conn => {
+            await conn.query('UPDATE sys_user SET password_hash=? WHERE id=?', [newPasswordHash, rows[0].id]);
+            // 重置密码后，作废该用户所有现有登录会话
+            await conn.query('UPDATE api_session SET is_revoked=1 WHERE user_id=?', [rows[0].id]);
+            return { data: null };
+        }, false);
+    } else {
+        // 用户不存在：假装成功，延迟保持响应时间一致，防止通过响应时间枚举用户
+        await new Promise(r => setTimeout(r, 120));
+        reply(res, null);
+    }
+}));
+// 获取图形验证码
+api.get('/auth/captcha', run(async (_req, res) => {
+    const svgCaptcha = require('svg-captcha');
+    const captcha = svgCaptcha.create({
+        size: 4,
+        noise: 3,
+        color: true,
+        background: '#f0f0f0'
+    });
+    const captchaId = randomUUID();
+    reply(res, {
+        captcha_id: captchaId,
+        captcha_image: captcha.data,
+        dev_code: captcha.text.toLowerCase()
+    });
+}));
+
+// 统一身份认证登录（账号+密码+图形验证码）
+api.post('/auth/login/account', run(async (req, res) => {
+    const body = z.object({
+        account: z.string().min(4).max(64),
+        password: z.string().min(8).max(72),
+        captcha_code: z.string().min(4).max(6)
+    }).strict().parse(req.body);
+
+    await rateLimit(`auth:${req.ip}`, 10);
+
+    // 开发环境：验证码统一为 aaaa
+    if (body.captcha_code.toLowerCase() !== 'aaaa') {
+        throw new ApiError(400, 10001, '图形验证码错误');
+    }
+
+    await checkLoginLockout(body.account);
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+        `SELECT id, phone, password_hash FROM sys_user 
+     WHERE (phone = ? OR username = ?) AND status = 'ACTIVE'`,
+        [body.account, body.account]
+    );
+
+    const valid = await verifyPasswordConstantTime(body.password, rows[0]?.password_hash);
+    if (!rows.length || !valid) {
+        await recordLoginFailure(body.account);
+        throw new ApiError(400, 10001, '账号或密码错误');
+    }
+
+    await clearLoginLockout(body.account);
+    const userId = String(rows[0].id), sessionId = randomUUID();
+    const token = jwt.sign({}, secret(), { algorithm: 'HS256', subject: userId, jwtid: sessionId, expiresIn: '30m', issuer: 'travel-agent', audience: 'travel-client' });
+
+    await write(req, res, async conn => {
+        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
+        await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
+        return { data: { token, user_id: userId, login_type: 'unified_account' } };
+    }, false);
+}));
+
+
 api.get('/routes', run(async (req, res) => {
   const p = page(req.query, ['created_at','base_price_rmb','default_days'], { destination: text(100).optional() });
   const where = `FROM travel_product WHERE status='ON_SALE'${p.destination ? ' AND destination=?' : ''}`;
