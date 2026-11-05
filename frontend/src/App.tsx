@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { request, isLoggedIn, logout } from './api';
+import { useSession } from './hooks/useAuth';
+import { restoreSession } from './lib/auth';
 import { LoginScreen } from './components/LoginScreen';
 import {
   ActiveTabKey,
@@ -29,6 +31,23 @@ export default function App() {
   // 当前激活的屏幕/标签
   const [currentTab, setCurrentTab] = useState<ActiveTabKey>('plan');
 
+  // 组员4：会话仓库是全局真相来源——被 401 踢下线时自动回到登录页
+  const session = useSession();
+  useEffect(() => {
+    setUser(session.accessToken ? session.user : null);
+  }, [session.accessToken, session.user]);
+
+  // 组员4：VITE_AUTH_PERSIST=1 时，刷新页面用 refresh_token 静默续期
+  useEffect(() => {
+    let alive = true;
+    void restoreSession().then((restored) => {
+      if (alive && restored) setUser(restored);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  
   // 方案数据
   const [itinerary, setItinerary] = useState<DetailedItinerary>(defaultPrototypeItinerary);
   // 消息数据

@@ -1,0 +1,357 @@
+/* ============================================================
+   组员4（阶段三·前端状态流与网络层）
+   认证页样式：登录 / 注册 / 找回密码。
+   变量复用 styles.css 的 :root 主题色，页面在手机壳与桌面居中两种形态下都自适应。
+   ============================================================ */
+
+.auth-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 18px 26px;
+  background: #ffffff;
+}
+
+.auth-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #378044, #1a4421);
+  color: #ffffff;
+  font-size: 20px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2px;
+}
+
+.auth-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #17291d;
+  letter-spacing: 0.2px;
+}
+
+.auth-subtitle {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #6b7f73;
+}
+
+/* 密码登录 / 短信登录 切换 */
+.auth-segment {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 12px;
+  background: #f1f6f2;
+}
+
+.auth-segment-item {
+  flex: 1;
+  padding: 9px 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #6b7f73;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.auth-segment-item-active {
+  background: #ffffff;
+  color: #1f5c2b;
+  box-shadow: 0 2px 8px rgba(20, 60, 30, 0.08);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4a5b51;
+}
+
+.auth-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid #e2ebe4;
+  border-radius: 11px;
+  background: #fbfdfb;
+  color: #18271d;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.auth-input::placeholder {
+  color: #a8b7ad;
+}
+
+.auth-input:focus {
+  border-color: #4b9a5f;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(75, 154, 95, 0.12);
+}
+
+.auth-input:disabled {
+  background: #f5f8f6;
+  color: #93a69a;
+}
+
+.auth-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-inline-row .auth-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 图形验证码图片 */
+.auth-captcha-image {
+  width: 92px;
+  height: 42px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid #e2ebe4;
+  border-radius: 10px;
+  background: #f4f8f5;
+  color: #8ca394;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.auth-captcha-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.auth-captcha-image:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* 短信发送按钮 */
+.auth-sms-button {
+  flex: 0 0 auto;
+  min-width: 104px;
+  height: 42px;
+  border: 1px solid #cfe3d5;
+  border-radius: 10px;
+  background: #f2f9f4;
+  color: #25622f;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.auth-sms-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.auth-link-inline {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #2f7a3d;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.auth-link-inline:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.auth-hint {
+  font-size: 11px;
+  line-height: 1.55;
+  color: #8a9c92;
+}
+
+.auth-error {
+  padding: 8px 10px;
+  border: 1px solid #f6d7d4;
+  border-radius: 10px;
+  background: #fdf1f0;
+  color: #b3261e;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.auth-notice {
+  padding: 8px 10px;
+  border: 1px solid #cfe7d7;
+  border-radius: 10px;
+  background: #f2faf5;
+  color: #22643a;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.auth-primary-button {
+  height: 46px;
+  margin-top: 2px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #378044, #1f5c2b);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(31, 92, 43, 0.18);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+
+.auth-primary-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.auth-primary-button:disabled {
+  opacity: 0.65;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.auth-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.auth-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #3a6b46;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.auth-footer-divider {
+  color: #c3d3c7;
+  font-size: 12px;
+}
+
+.auth-endpoint {
+  margin-top: auto;
+  padding-top: 6px;
+  color: #a8b7ad;
+  font-size: 10.5px;
+  text-align: center;
+  word-break: break-all;
+}
+
+.auth-back-button {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #4a5b51;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* 重置成功页 */
+.auth-result {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.auth-result-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #eaf5ed;
+  color: #2f7a3d;
+  font-size: 28px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-result .auth-primary-button {
+  width: 100%;
+  margin-top: 12px;
+}
+
+/* 小屏（老机型）/ 横屏：压缩纵向留白，保证一屏能看完 */
+@media (max-height: 720px) {
+  .auth-page {
+    padding: 14px 16px 18px;
+    gap: 11px;
+  }
+
+  .auth-title {
+    font-size: 20px;
+  }
+
+  .auth-form {
+    gap: 10px;
+  }
+
+  .auth-input,
+  .auth-sms-button,
+  .auth-captcha-image {
+    height: 40px;
+  }
+}
+
+/* 桌面端（宽屏）：手机壳本身是 390px，这里只做留白与点击热区的增强 */
+@media (min-width: 1024px) {
+  .auth-page {
+    padding: 24px 20px 28px;
+  }
+
+  .auth-input {
+    height: 44px;
+  }
+
+  .auth-primary-button {
+    height: 48px;
+  }
+}

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import svgCaptcha from 'svg-captcha';
 import { z } from 'zod';
 import { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { pool } from '../db/connection.js';
@@ -23,6 +24,50 @@ const planFields = 'id,itinerary_no AS plan_id,title,status,version,days_count,s
 const orderFields = `id,id AS order_id,product_id AS route_id,travel_date,traveler_count AS people_count,total_amount AS amount,
   CASE status WHEN 'PENDING' THEN 'CREATED' WHEN 'CANCELLED' THEN 'CANCELED' ELSE status END AS status,created_at`;
 const text = (max: number) => z.string().trim().min(1).max(max);
+
+/* ------------------------------------------------------------------ *
+ * 组员4 补丁：图形验证码 / 短信验证码 / 令牌刷新
+ * 1. 图形验证码改为「服务端存 captcha_id → code，5 分钟过期，校验即消费」，
+ *    不再写死 aaaa（未带 X-Captcha-Id 时保留 aaaa 后门，供 e2e 与接口自测）。
+ * 2. 短信验证码新增 /auth/sms/send 下发 6 位码，登录/重置密码按码校验；
+ *    开发环境仍兼容固定 123456（既有联调脚本与文档依赖它）。
+ * 3. 新增 /auth/refresh，供前端 401 时静默换票（滑动续期，复用 api_session）。
+ * 单体演示用内存表足够；多实例部署请换成 Redis（ioredis 已在依赖内）。
+ * ------------------------------------------------------------------ */
+const captchaStore = new Map<string, { code: string; expiresAt: number }>();
+const smsCodeStore = new Map<string, { code: string; expiresAt: number }>();
+const CAPTCHA_TTL_MS = 5 * 60 * 1000;
+const SMS_TTL_MS = 5 * 60 * 1000;
+const DEV_CAPTCHA_CODE = 'aaaa';
+const DEV_SMS_CODE = '123456';
+const codeStores = [captchaStore, smsCodeStore];
+const sweepTimer = setInterval(() => {
+  const now = Date.now();
+  for (const store of codeStores) {
+    for (const [key, value] of store) if (value.expiresAt <= now) store.delete(key);
+  }
+}, 60_000);
+sweepTimer.unref();
+
+/** 校验并消费一次性验证码；开发环境额外放行固定后门值 */
+const consumeCode = (
+  store: Map<string, { code: string; expiresAt: number }>,
+  key: string,
+  code: string,
+  devFallback: string
+): boolean => {
+  const record = store.get(key);
+  store.delete(key);
+  if (record && record.expiresAt > Date.now() && record.code === code.toLowerCase()) return true;
+  return process.env.NODE_ENV !== 'production' && code.toLowerCase() === devFallback;
+};
+
+/** 签发 access token + refresh token（refresh 用 typ 标记，避免被当成 access token 使用） */
+const issueTokens = (userId: string, sessionId: string) => ({
+  token: jwt.sign({}, secret(), { algorithm: 'HS256', subject: userId, jwtid: sessionId, expiresIn: '30m', issuer: 'travel-agent', audience: 'travel-client' }),
+  refresh_token: jwt.sign({ typ: 'refresh' }, secret(), { algorithm: 'HS256', subject: userId, jwtid: sessionId, expiresIn: '7d', issuer: 'travel-agent', audience: 'travel-client' }),
+  expires_in: 1800
+});
 
 api.use((req, _res, next) => { rateLimit(`ip:${req.ip}`, 120).then(() => next(), next); });
 
@@ -49,11 +94,11 @@ api.post('/auth/login', run(async (req, res) => {
   }
   await clearLoginLockout(body.mobile);
   const userId = String(rows[0].id), sessionId = randomUUID();
-  const token = jwt.sign({}, secret(), { algorithm: 'HS256', subject: userId, jwtid: sessionId, expiresIn: '30m', issuer: 'travel-agent', audience: 'travel-client' });
+  const tokens = issueTokens(userId, sessionId);
   await write(req, res, async conn => {
     await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
     await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
-    return { data: { token, user_id: userId } };
+    return { data: { ...tokens, user_id: userId } };
   }, false);
 }));
 
@@ -63,9 +108,8 @@ api.post('/auth/login/sms', run(async (req, res) => {
     await rateLimit(`auth:${req.ip}`, 10);
     await checkLoginLockout(body.mobile);
 
-    // TODO: 对接真实短信服务后，替换为从 Redis/数据库校验真实验证码
-    // 当前开发环境：验证码统一为 123456
-    if (body.sms_code !== '123456') {
+    // 短信验证码：优先校验 /auth/sms/send 下发的码，开发环境兼容固定 123456
+    if (!consumeCode(smsCodeStore, `${body.mobile}:login`, body.sms_code, DEV_SMS_CODE)) {
         await recordLoginFailure(body.mobile);
         throw new ApiError(400, 10001, '验证码错误或已过期');
     }
@@ -78,12 +122,12 @@ api.post('/auth/login/sms', run(async (req, res) => {
 
     await clearLoginLockout(body.mobile);
     const userId = String(rows[0].id), sessionId = randomUUID();
-    const token = jwt.sign({}, secret(), { algorithm: 'HS256', subject: userId, jwtid: sessionId, expiresIn: '30m', issuer: 'travel-agent', audience: 'travel-client' });
+    const tokens = issueTokens(userId, sessionId);
 
     await write(req, res, async conn => {
         await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
         await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
-        return { data: { token, user_id: userId } };
+        return { data: { ...tokens, user_id: userId } };
     }, false);
 }));
 
@@ -92,9 +136,8 @@ api.post('/auth/reset-password', run(async (req, res) => {
     const body = z.object({ mobile, sms_code: z.string().length(6), new_password: z.string().min(8).max(72) }).strict().parse(req.body);
     await rateLimit(`auth:${req.ip}`, 10);
 
-    // TODO: 对接真实短信服务后，替换为从 Redis/数据库校验真实验证码
-    // 当前开发环境：验证码统一为 123456
-    if (body.sms_code !== '123456') {
+    // 短信验证码：与登录共用一套下发/校验逻辑（scene=reset）
+    if (!consumeCode(smsCodeStore, `${body.mobile}:reset`, body.sms_code, DEV_SMS_CODE)) {
         throw new ApiError(400, 10001, '验证码错误或已过期');
     }
 
@@ -117,18 +160,36 @@ api.post('/auth/reset-password', run(async (req, res) => {
 }));
 // 获取图形验证码
 api.get('/auth/captcha', run(async (_req, res) => {
-    const svgCaptcha = require('svg-captcha');
     const captcha = svgCaptcha.create({
         size: 4,
         noise: 3,
         color: true,
-        background: '#f0f0f0'
+        background: '#f0f0f0',
+        ignoreChars: '0o1ilI'
     });
     const captchaId = randomUUID();
+    captchaStore.set(captchaId, {
+        code: captcha.text.toLowerCase(),
+        expiresAt: Date.now() + CAPTCHA_TTL_MS
+    });
     reply(res, {
         captcha_id: captchaId,
         captcha_image: captcha.data,
-        dev_code: captcha.text.toLowerCase()
+        // 生产环境必须返回 undefined：不能把答案送给前端
+        dev_code: process.env.NODE_ENV === 'production' ? undefined : captcha.text.toLowerCase()
+    });
+}));
+
+// 发送短信验证码（开发环境直接把码回传，生产环境需接真实短信网关）
+api.post('/auth/sms/send', run(async (req, res) => {
+    const body = z.object({ mobile, scene: z.enum(['login', 'reset']).default('login') }).strict().parse(req.body);
+    await rateLimit(`sms:${req.ip}`, 5);
+    const smsCode = String(Math.floor(100000 + Math.random() * 900000));
+    smsCodeStore.set(`${body.mobile}:${body.scene}`, { code: smsCode, expiresAt: Date.now() + SMS_TTL_MS });
+    reply(res, {
+        sent: true,
+        expires_in: 300,
+        ...(process.env.NODE_ENV === 'production' ? {} : { dev_code: smsCode })
     });
 }));
 
@@ -142,9 +203,14 @@ api.post('/auth/login/account', run(async (req, res) => {
 
     await rateLimit(`auth:${req.ip}`, 10);
 
-    // 开发环境：验证码统一为 aaaa
-    if (body.captcha_code.toLowerCase() !== 'aaaa') {
-        throw new ApiError(400, 10001, '图形验证码错误');
+    // 图形验证码：按 captcha_id 校验，一次性消费。
+    // captcha_id 走请求头 X-Captcha-Id（放进请求体会被 .strict() 拒掉）。
+    const captchaId = String(req.get('X-Captcha-Id') ?? '');
+    const captchaOk = captchaId
+        ? consumeCode(captchaStore, captchaId, body.captcha_code, DEV_CAPTCHA_CODE)
+        : consumeCode(captchaStore, '', body.captcha_code, DEV_CAPTCHA_CODE);
+    if (!captchaOk) {
+        throw new ApiError(400, 10001, '图形验证码错误或已过期');
     }
 
     await checkLoginLockout(body.account);
@@ -163,12 +229,12 @@ api.post('/auth/login/account', run(async (req, res) => {
 
     await clearLoginLockout(body.account);
     const userId = String(rows[0].id), sessionId = randomUUID();
-    const token = jwt.sign({}, secret(), { algorithm: 'HS256', subject: userId, jwtid: sessionId, expiresIn: '30m', issuer: 'travel-agent', audience: 'travel-client' });
+    const tokens = issueTokens(userId, sessionId);
 
     await write(req, res, async conn => {
         await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
         await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
-        return { data: { token, user_id: userId, login_type: 'unified_account' } };
+        return { data: { ...tokens, user_id: userId, login_type: 'unified_account' } };
     }, false);
 }));
 
@@ -198,6 +264,47 @@ api.get('/spots', run(async (req, res) => {
   const p = page(req.query, ['created_at','name','rating'], { city_name: text(50).optional() });
   const where = `FROM poi WHERE poi_type='ATTRACTION' AND status='ACTIVE'${p.city_name ? ' AND city_name=?' : ''}`;
   reply(res, await list(pool, `SELECT id,id AS spot_id,name,city_name,address,rating,opening_hours,cover_image_url,created_at ${where}`, `SELECT COUNT(*) total ${where}`, p.city_name ? [p.city_name] : [], p));
+}));
+
+// 刷新令牌（组员4 补丁）：前端 401 时静默换票。
+// 必须放在 authenticateJwt 之前——换票请求本身是匿名的（只带 refresh_token）。
+api.post('/auth/refresh', run(async (req, res) => {
+  const body = z.object({ refresh_token: z.string().min(20) }).strict().parse(req.body);
+  await rateLimit(`refresh:${req.ip}`, 20);
+
+  let payload: jwt.JwtPayload;
+  try {
+    payload = jwt.verify(body.refresh_token, secret(), {
+      algorithms: ['HS256'], issuer: 'travel-agent', audience: 'travel-client'
+    }) as jwt.JwtPayload;
+  } catch {
+    throw new ApiError(401, 20012, '刷新凭证已失效，请重新登录');
+  }
+  // typ 缺失说明这是一枚 access token，不能拿来换票
+  if (payload.typ !== 'refresh' || !payload.sub || !payload.jti) {
+    throw new ApiError(401, 20012, '刷新凭证无效');
+  }
+
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT 1 FROM api_session s JOIN sys_user u ON u.id = s.user_id
+      WHERE s.session_id = ? AND s.user_id = ? AND s.is_revoked = 0
+        AND s.expires_at > UTC_TIMESTAMP() AND u.status = 'ACTIVE'`,
+    [payload.jti, payload.sub]
+  );
+  if (!rows.length) throw new ApiError(401, 20012, '登录已失效，请重新登录');
+
+  // 滑动续期：会话再推后 30 分钟（不新增表）
+  await pool.query(
+    'UPDATE api_session SET expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 MINUTE) WHERE session_id = ?',
+    [payload.jti]
+  );
+
+  const subject = String(payload.sub), session = String(payload.jti);
+  reply(res, {
+    token: jwt.sign({}, secret(), { algorithm: 'HS256', subject, jwtid: session, expiresIn: '30m', issuer: 'travel-agent', audience: 'travel-client' }),
+    refresh_token: jwt.sign({ typ: 'refresh' }, secret(), { algorithm: 'HS256', subject, jwtid: session, expiresIn: '7d', issuer: 'travel-agent', audience: 'travel-client' }),
+    expires_in: 1800
+  });
 }));
 
 api.use(authenticateJwt);
