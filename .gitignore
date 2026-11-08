@@ -38,3 +38,7 @@ Thumbs.db
 
 # WorkBuddy 工作区数据（非项目文件）
 .workbuddy/
+
+# Python 残留
+__pycache__/
+*.pyc
