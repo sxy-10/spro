@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { DetailedItinerary } from '../types';
+import { AuthPermission } from './AuthPermission';
 
 interface ItineraryScreenProps {
   itinerary: DetailedItinerary;
@@ -33,9 +34,7 @@ export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
         </button>
         <div className="itinerary-screen-title">{itinerary.title}</div>
         <div className="itinerary-nav-actions">
-          <button type="button" className="btn-nav-action-text" onClick={onExportClick}>
-            导出
-          </button>
+          <AuthPermission code="itinerary:plan:export"><button type="button" className="btn-nav-action-text" onClick={onExportClick}>导出</button></AuthPermission>
           <button type="button" className="btn-nav-action-text">
             编辑
           </button>
@@ -137,22 +136,10 @@ export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
 
       {/* 底部悬浮操作按钮条 */}
       <div className="itinerary-bottom-floating-bar">
-        <button
-          type="button"
-          className="btn-ai-reorder"
-          onClick={onReorderClick}
-          disabled={isReordering}
-        >
-          <span className="ai-wand-icon">✨</span>
-          <span>{isReordering ? '正在重排排布...' : 'AI 一键重新排布'}</span>
-        </button>
-        <button
-          type="button"
-          className="btn-export-secondary"
-          onClick={onExportClick}
-        >
-          导出方案
-        </button>
+        <AuthPermission code="itinerary:plan:update"><button type="button" className="btn-ai-reorder" onClick={onReorderClick} disabled={isReordering}>
+          <span className="ai-wand-icon">✨</span><span>{isReordering ? '正在重排排布...' : 'AI 一键重新排布'}</span>
+        </button></AuthPermission>
+        <AuthPermission code="itinerary:plan:export"><button type="button" className="btn-export-secondary" onClick={onExportClick}>导出方案</button></AuthPermission>
       </div>
     </div>
   );

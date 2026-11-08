@@ -25,6 +25,8 @@ import { ExploreScreen } from './components/ExploreScreen';
 import { ProfileScreen } from './components/ProfileScreen';
 import { AdminScreen } from './components/AdminScreen';
 import { ExportModal } from './components/ExportModal';
+import { ForbiddenScreen } from './components/ForbiddenScreen';
+import { usePermission } from './hooks/useAuth';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -33,6 +35,7 @@ export default function App() {
 
   // 组员4：会话仓库是全局真相来源——被 401 踢下线时自动回到登录页
   const session = useSession();
+  const canQueryRoutes = usePermission('route:line:query');
   useEffect(() => {
     setUser(session.accessToken ? session.user : null);
   }, [session.accessToken, session.user]);
@@ -55,9 +58,9 @@ export default function App() {
   // 管理中台数据
   const [adminData, setAdminData] = useState<AdminMetricsData>(defaultAdminMetrics);
   useEffect(() => {
-    if (currentTab !== 'admin' || user?.role !== 'ADMIN') return;
+    if (currentTab !== 'admin' || !canQueryRoutes) return;
     request('/admin/routes').then(data => setAdminData(prev => ({...prev, routes:data.list.map((r:any)=>({id:r.route_id,title:r.title,description:`${r.destination} · ¥${r.base_price_rmb}`,statusText:r.status==='ON_SALE'?'在售':'已下架'}))}))).catch(error=>alert(error.message));
-  }, [currentTab, user]);
+  }, [currentTab, user, canQueryRoutes]);
 
   // 智能体生成中状态
   const [isGenerating, setIsGenerating] = useState(false);
@@ -261,7 +264,9 @@ export default function App() {
           />
         );
       case 'admin':
-        if (!user || user.role !== 'ADMIN') return <p>需要管理员权限</p>;
+        if (!user || !canQueryRoutes) {
+          return <ForbiddenScreen onBack={() => setCurrentTab('profile')} />;
+        }
         return (
           <AdminScreen
             adminData={adminData}

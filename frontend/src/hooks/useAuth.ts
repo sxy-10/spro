@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from 'react';
 import { getSession, subscribeSession } from '../lib/session';
 import type { AuthPermissions, AuthUser, SessionSnapshot } from '../lib/session';
+import { hasPermissionCode } from '../lib/permissions';
 
 export const useSession = (): SessionSnapshot =>
   useSyncExternalStore(subscribeSession, getSession, getSession);
@@ -27,7 +28,7 @@ export const useAuth = (): AuthState => {
 
 /** 权限码判定：permissions 里带 `route:line:add` 这种「模块:资源:操作」码 */
 export const hasPermission = (permissions: AuthPermissions | null, code: string): boolean =>
-  Boolean(permissions?.buttons?.some((button) => button.code === code));
+  hasPermissionCode(permissions, code);
 
 export const usePermission = (code: string): boolean => {
   const { permissions } = useAuth();

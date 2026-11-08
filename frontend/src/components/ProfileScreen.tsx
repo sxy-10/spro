@@ -1,5 +1,6 @@
 import React from 'react';
 import { BookingScreen } from './BookingScreen';
+import { AuthPermission } from './AuthPermission';
 
 interface ProfileScreenProps {
   onOpenAdminConsole: () => void;
@@ -76,13 +77,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onOpenAdminConsole
       </div>
 
       {/* 管理中台快捷入口 */}
-      {isAdmin && <div className="profile-admin-entrance-card" onClick={onOpenAdminConsole}>
+      {isAdmin && <AuthPermission code="route:line:query"><div className="profile-admin-entrance-card" onClick={onOpenAdminConsole}>
         <div className="admin-entrance-left">
           <div className="entrance-title">旅行社智能体管理中台</div>
           <div className="entrance-desc">查看全网行程并发、转化漏斗与人设引擎</div>
         </div>
         <div className="entrance-arrow">➔</div>
-      </div>}
+      </div></AuthPermission>}
       <button type="button" onClick={onLogout}>退出登录</button>
       <BookingScreen />
     </div>

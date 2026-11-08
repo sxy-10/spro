@@ -1,5 +1,6 @@
 import React from 'react';
 import { AdminMetricsData } from '../types';
+import { AuthPermission } from './AuthPermission';
 
 interface AdminScreenProps {
   adminData: AdminMetricsData;
@@ -51,9 +52,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       <div className="admin-section-block">
         <div className="section-title-row">
           <h3 className="section-title">智能体人设与风控引擎</h3>
-          <button type="button" className="btn-section-action" onClick={onAddNewPersona}>
-            + 新增
-          </button>
+          <AuthPermission code="system:permission:add"><button type="button" className="btn-section-action" onClick={onAddNewPersona}>+ 新增</button></AuthPermission>
         </div>
 
         <div className="admin-item-cards-list">
@@ -75,9 +74,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       <div className="admin-section-block">
         <div className="section-title-row">
           <h3 className="section-title">线路库与产品快速上架</h3>
-          <button type="button" className="btn-section-action" onClick={onAddNewRoute}>
-            + 上架新路线
-          </button>
+          <AuthPermission code="route:line:add"><button type="button" className="btn-section-action" onClick={onAddNewRoute}>+ 上架新路线</button></AuthPermission>
         </div>
 
         <div className="admin-item-cards-list">
@@ -87,9 +84,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
                 <div className="entity-card-title">{route.title}</div>
                 <div className="entity-card-desc">{route.description}</div>
               </div>
-              <button type="button" className="btn-status-pill-outline">
-                {route.statusText}
-              </button>
+              <AuthPermission code="route:line:delete" mode="disable"><button type="button" className="btn-status-pill-outline">{route.statusText}</button></AuthPermission>
             </div>
           ))}
         </div>
