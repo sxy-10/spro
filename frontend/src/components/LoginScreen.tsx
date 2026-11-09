@@ -7,7 +7,7 @@
  *   通过 const { permissions } = useAuth() 取用即可，不用再请求一次。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { AUTH_CONFIG, API_BASE_URL } from '../lib/config';
+import { AUTH_CONFIG } from '../lib/config';
 import { ApiError } from '../lib/http';
 import {
   fetchCaptcha,
@@ -430,8 +430,6 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           </button>
         )}
       </footer>
-
-      {import.meta.env.DEV ? <p className="auth-endpoint">接口地址：{API_BASE_URL}</p> : null}
     </div>
   );
 }

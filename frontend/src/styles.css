@@ -192,6 +192,236 @@ body {
   cursor: pointer;
 }
 
+/* 退出登录按钮 */
+.profile-logout-button {
+  width: 100%;
+  padding: 11px 16px;
+  border: 1px solid #fed7d7;
+  background: #fffafa;
+  color: #c53030;
+  border-radius: 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.15s ease;
+  margin-top: 4px;
+}
+
+.profile-logout-button:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
+.profile-logout-button:active {
+  transform: scale(0.99);
+}
+
+/* 线路预订卡片（BookingScreen） */
+.profile-booking-card {
+  background: #fbfdfc;
+  border: 1px solid #e7ede8;
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.booking-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.booking-header-title-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.booking-header-icon {
+  font-size: 17px;
+}
+
+.booking-card-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #1a2a1f;
+}
+
+.booking-stock-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.booking-stock-pill.available {
+  background: #ecf7ef;
+  color: #1a6f33;
+  border: 1px solid #c9e8d3;
+}
+
+.booking-stock-pill.soldout {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+.booking-stock-pill.checking {
+  background: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+}
+
+.booking-form {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.booking-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.booking-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3b4e41;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.booking-label-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: #798b80;
+}
+
+.booking-input,
+.booking-select {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  background: #ffffff;
+  border: 1px solid #d3ded6;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #1a291f;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.booking-input:focus,
+.booking-select:focus {
+  border-color: var(--theme-brand-green);
+  box-shadow: 0 0 0 3px rgba(37, 88, 44, 0.1);
+}
+
+.booking-input:disabled,
+.booking-select:disabled {
+  background: #f5f7f5;
+  color: #94a398;
+  cursor: not-allowed;
+}
+
+.booking-row-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.booking-summary-banner {
+  background: #f4f9f5;
+  border: 1px solid #d4ebd9;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.booking-summary-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.booking-summary-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #244b2d;
+}
+
+.booking-summary-sub {
+  font-size: 11px;
+  color: #637b6b;
+}
+
+.booking-summary-price {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--theme-brand-green);
+}
+
+.booking-submit-button {
+  width: 100%;
+  height: 40px;
+  background: var(--theme-brand-green);
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+  box-shadow: 0 4px 12px rgba(37, 88, 44, 0.18);
+}
+
+.booking-submit-button:hover:not(:disabled) {
+  background: var(--theme-dark-green);
+}
+
+.booking-submit-button:disabled {
+  background: #a4beab;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.booking-alert-box {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.booking-alert-box.success {
+  background: #edf8f0;
+  border: 1px solid #bce6c6;
+  color: #175e2d;
+}
+
+.booking-alert-box.error {
+  background: #fff5f5;
+  border: 1px solid #fed7d7;
+  color: #c53030;
+}
+
 .btn-new-capsule .plus-symbol {
   font-size: 15px;
   line-height: 1;

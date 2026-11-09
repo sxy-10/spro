@@ -121,7 +121,26 @@ export async function resetPassword(input: {
 
 /* ------------------------------ 资料/权限 ---------------------------- */
 
+const maskMobile = (value?: string | null) => value?.replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2') ?? value;
+
 export const loadProfile = async (userId: string): Promise<AuthUser> => {
+  try {
+    const me = await request<any>('/users/me');
+    if (me && (me.user_id || me.id)) {
+      const roleCodes: string[] = Array.isArray(me.roles)
+        ? me.roles.map((r: any) => (typeof r === 'string' ? r : r.code)).filter(Boolean)
+        : [];
+      return {
+        ...me,
+        user_id: String(me.user_id || me.id || userId),
+        mobile: me.phone ? maskMobile(me.phone) : (me.mobile || null),
+        roles: roleCodes,
+        role: roleCodes[0] || me.role
+      };
+    }
+  } catch {
+    // 优雅降级走基础用户资料接口
+  }
   const profile = await request<AuthUser>(`/users/${userId}`);
   return { ...profile, user_id: userId };
 };

@@ -36,6 +36,17 @@ export default function App() {
   // 组员4：会话仓库是全局真相来源——被 401 踢下线时自动回到登录页
   const session = useSession();
   const canQueryRoutes = usePermission('route:line:query');
+  const hasAdminAccess = Boolean(
+    canQueryRoutes ||
+    user?.role === 'ADMIN' ||
+    user?.role === 'SUPER_ADMIN' ||
+    user?.role === 'AGENCY_ADMIN' ||
+    (Array.isArray(user?.roles) && user.roles.some((r: any) => {
+      const code = typeof r === 'string' ? r : r.code;
+      return ['ADMIN', 'SUPER_ADMIN', 'AGENCY_ADMIN'].includes(code);
+    }))
+  );
+
   useEffect(() => {
     setUser(session.accessToken ? session.user : null);
   }, [session.accessToken, session.user]);
@@ -58,9 +69,9 @@ export default function App() {
   // 管理中台数据
   const [adminData, setAdminData] = useState<AdminMetricsData>(defaultAdminMetrics);
   useEffect(() => {
-    if (currentTab !== 'admin' || !canQueryRoutes) return;
+    if (currentTab !== 'admin' || !hasAdminAccess) return;
     request('/admin/routes').then(data => setAdminData(prev => ({...prev, routes:data.list.map((r:any)=>({id:r.route_id,title:r.title,description:`${r.destination} · ¥${r.base_price_rmb}`,statusText:r.status==='ON_SALE'?'在售':'已下架'}))}))).catch(error=>alert(error.message));
-  }, [currentTab, user, canQueryRoutes]);
+  }, [currentTab, user, hasAdminAccess]);
 
   // 智能体生成中状态
   const [isGenerating, setIsGenerating] = useState(false);
@@ -255,16 +266,19 @@ export default function App() {
         );
       case 'profile':
         if (!user || !isLoggedIn()) return <LoginScreen onLogin={setUser} />;
+        const rawPhone = String(user.phone || user.mobile || '');
+        const validPhone = /^1[3-9]\d{9}$/.test(rawPhone) ? rawPhone : '';
         return (
           <ProfileScreen
-            nickname={user.nickname || user.mobile}
-            isAdmin={user.role === 'ADMIN'}
+            nickname={user.nickname || user.mobile || user.phone || '旅行家'}
+            isAdmin={hasAdminAccess}
+            defaultMobile={validPhone}
             onLogout={async () => { try { await logout(); setUser(null); } catch (e) { alert(e instanceof Error ? e.message : '退出失败'); } }}
             onOpenAdminConsole={() => setCurrentTab('admin')}
           />
         );
       case 'admin':
-        if (!user || !canQueryRoutes) {
+        if (!user || !hasAdminAccess) {
           return <ForbiddenScreen onBack={() => setCurrentTab('profile')} />;
         }
         return (

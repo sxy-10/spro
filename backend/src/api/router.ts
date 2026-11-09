@@ -13,6 +13,7 @@ import { ApiError, id, mobile, utc, money, reply, run, page, list, write, secret
 import { authenticateJwt } from '../auth/passport.js';
 import { requirePermission } from '../auth/rbac.js';
 import { rbac } from './rbacRouter.js';
+import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
 
 export const api = Router();
@@ -76,8 +77,22 @@ api.post('/auth/register', run(async (req, res) => {
   await rateLimit(`auth:${req.ip}`, 10);
   const passwordHash = await hashPassword(body.password);
   await write(req, res, async conn => {
+    const [existing] = await conn.query<RowDataPacket[]>('SELECT id FROM sys_user WHERE phone=? LIMIT 1', [body.mobile]);
+    if (existing.length) throw new ApiError(400, 10001, '该手机号已注册，请直接登录');
     await conn.query('INSERT INTO sys_user(username,phone,password_hash) VALUES (?,?,?)', [body.mobile, body.mobile, passwordHash]);
     const [rows] = await conn.query<RowDataPacket[]>('SELECT CAST(id AS CHAR) AS user_id FROM sys_user WHERE phone=?', [body.mobile]);
+    const newUserId = rows[0]?.user_id;
+    if (newUserId) {
+      try {
+        const [roleRows] = await conn.query<RowDataPacket[]>('SELECT id FROM sys_role WHERE code = ? LIMIT 1', ['TOURIST']);
+        if (roleRows.length > 0) {
+          await conn.query('INSERT IGNORE INTO sys_user_role(user_id, role_id) VALUES (?, ?)', [newUserId, roleRows[0].id]);
+          invalidatePolicyCache('auth.register.tourist');
+        }
+      } catch {
+        // 若 RBAC 基础表尚未初始化，平滑降级保证基础注册成功
+      }
+    }
     return { data: rows[0], status: 201 };
   }, false);
 }));
@@ -96,7 +111,7 @@ api.post('/auth/login', run(async (req, res) => {
   const userId = String(rows[0].id), sessionId = randomUUID();
   const tokens = issueTokens(userId, sessionId);
   await write(req, res, async conn => {
-    await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
+    await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7 DAY))', [sessionId, userId]);
     await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
     return { data: { ...tokens, user_id: userId } };
   }, false);
@@ -125,7 +140,7 @@ api.post('/auth/login/sms', run(async (req, res) => {
     const tokens = issueTokens(userId, sessionId);
 
     await write(req, res, async conn => {
-        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
+        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7 DAY))', [sessionId, userId]);
         await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
         return { data: { ...tokens, user_id: userId } };
     }, false);
@@ -183,7 +198,8 @@ api.get('/auth/captcha', run(async (_req, res) => {
 // 发送短信验证码（开发环境直接把码回传，生产环境需接真实短信网关）
 api.post('/auth/sms/send', run(async (req, res) => {
     const body = z.object({ mobile, scene: z.enum(['login', 'reset']).default('login') }).strict().parse(req.body);
-    await rateLimit(`sms:${req.ip}`, 5);
+    await rateLimit(`sms:ip:${req.ip}`, 10);
+    await rateLimit(`sms:mobile:${body.mobile}`, 3);
     const smsCode = String(Math.floor(100000 + Math.random() * 900000));
     smsCodeStore.set(`${body.mobile}:${body.scene}`, { code: smsCode, expiresAt: Date.now() + SMS_TTL_MS });
     reply(res, {
@@ -232,7 +248,7 @@ api.post('/auth/login/account', run(async (req, res) => {
     const tokens = issueTokens(userId, sessionId);
 
     await write(req, res, async conn => {
-        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
+        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7 DAY))', [sessionId, userId]);
         await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
         return { data: { ...tokens, user_id: userId, login_type: 'unified_account' } };
     }, false);
@@ -295,7 +311,7 @@ api.post('/auth/refresh', run(async (req, res) => {
 
   // 滑动续期：会话再推后 30 分钟（不新增表）
   await pool.query(
-    'UPDATE api_session SET expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 MINUTE) WHERE session_id = ?',
+    'UPDATE api_session SET expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 7 DAY) WHERE session_id = ?',
     [payload.jti]
   );
 
