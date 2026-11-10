@@ -4,6 +4,7 @@ import { Request, Response, NextFunction } from 'express';
 import { RowDataPacket } from 'mysql2/promise';
 import { pool } from '../db/connection.js';
 import { secret, ApiError } from '../api/core.js';
+import { bearerToken, readCachedUser, writeCachedUser } from './sessionCache.js';
 
 /**
  * 身份认证策略模块：基于 Passport.js (passport-jwt) 工业级框架实现的无状态凭证校验中间件
@@ -126,24 +127,54 @@ passport.use(
 
 /**
  * HTTP 鉴权守卫中间件：基于 Passport.js JWT 策略构建的会话拦截器
+ *
+ * 阶段一改造：加了一层 Redis 缓存快路径
+ *   1. Redis 命中（登录后首次请求写入，TTL 默认 5 分钟）
+ *      → 直接拿到用户/角色/权限，**省掉 api_session + sys_user_role + sys_role_permission 三条 SQL**
+ *   2. Redis 未命中或不可用 → 走原来的 passport 验签 + 查库逻辑，成功后回填缓存
+ *   3. 命中缓存时仍会重新验签 JWT（在 readCachedUser 内部），伪造 token 读不到缓存
+ *
  * 输出：passport.authenticate('jwt') 并拦截格式化为 401 统一业务异常
  */
 export const authenticateJwt = (req: Request, res: Response, next: NextFunction): void => {
-  passport.authenticate('jwt', { session: false }, (error: any, user: AuthenticatedUserPayload | false, info: any) => {
-    if (error) {
-      return next(error);
-    }
-    if (!user) {
-      const failureMessage = info?.message || '请先登录';
-      return next(new ApiError(401, 20012, failureMessage));
-    }
+  const token = bearerToken(req.headers.authorization);
 
+  const attach = (user: AuthenticatedUserPayload): void => {
     // 同时赋给 req.user（Passport 规范）和 res.locals（已有接口兼容）
     req.user = user;
     res.locals.user = user;
     res.locals.sessionId = user.sessionId;
-    next();
-  })(req, res, next);
+  };
+
+  void (async () => {
+    // 1) 缓存快路径
+    if (token) {
+      const cached = await readCachedUser(token);
+      if (cached) {
+        attach(cached);
+        next();
+        return;
+      }
+    }
+
+    // 2) 常规路径：验签 + 查库
+    passport.authenticate('jwt', { session: false }, (error: any, user: AuthenticatedUserPayload | false, info: any) => {
+      if (error) {
+        next(error);
+        return;
+      }
+      if (!user) {
+        const failureMessage = info?.message || '请先登录';
+        next(new ApiError(401, 20012, failureMessage));
+        return;
+      }
+
+      attach(user);
+      // 首次认证成功后回填缓存，下一次请求就能命中；写失败不影响本次请求
+      if (token) void writeCachedUser(token, user);
+      next();
+    })(req, res, next);
+  })().catch(next);
 };
 
 export default passport;

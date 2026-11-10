@@ -15,6 +15,8 @@ import { requirePermission } from '../auth/rbac.js';
 import { rbac } from './rbacRouter.js';
 import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
+import { bearerToken, dropCachedUser } from '../auth/sessionCache.js';
+import { listDict, isDictType } from '../db/dict.js';
 
 export const api = Router();
 const planner = new TravelPlannerAgent();
@@ -284,6 +286,16 @@ api.get('/spots', run(async (req, res) => {
   reply(res, await list(pool, `SELECT id,id AS spot_id,name,city_name,address,rating,opening_hours,cover_image_url,created_at ${where}`, `SELECT COUNT(*) total ${where}`, p.city_name ? [p.city_name] : [], p));
 }));
 
+// 基础字典（组员1 · 阶段一）：民族 / 出发城市 / 旅行风格 / 餐饮偏好 / 季节
+// 公开接口，不需要登录——注册页和筛选器在未登录时也要用。
+// 走 Redis 缓存（dict:{type}，1 小时），所以这里可以放心放开 Cache-Control。
+api.get('/dict/:type', run(async (req, res) => {
+  const type = String(req.params.type ?? '').trim();
+  if (!isDictType(type)) throw new ApiError(400, 10001, '不支持的字典类型');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  reply(res, await listDict(type));
+}));
+
 // 刷新令牌（组员4 补丁）：前端 401 时静默换票。
 // 必须放在 authenticateJwt 之前——换票请求本身是匿名的（只带 refresh_token）。
 api.post('/auth/refresh', run(async (req, res) => {
@@ -334,6 +346,9 @@ api.post('/auth/logout', run(async (req, res) => {
     await conn.query('UPDATE api_session SET is_revoked=1 WHERE session_id=?', [res.locals.sessionId]);
     return { data: null };
   });
+  // 阶段一：MySQL 里的会话已吊销，Redis 缓存也要立刻删掉，否则在 TTL 内仍能通过认证
+  const token = bearerToken(req.headers.authorization);
+  if (token) await dropCachedUser(token);
 }));
 api.get('/users/:id', run(async (req, res) => {
   const userId = id.parse(req.params.id);
