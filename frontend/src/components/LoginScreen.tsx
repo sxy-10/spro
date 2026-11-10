@@ -22,6 +22,7 @@ import type { AuthUser } from '../lib/session';
 import { useCountdown } from '../hooks/useCountdown';
 import { useSession } from '../hooks/useAuth';
 import { AuthCaptcha } from './AuthCaptcha';
+import { PasswordInput } from './PasswordInput';
 import { SmsCodeField } from './SmsCodeField';
 import { ResetPasswordScreen } from './ResetPasswordScreen';
 import './auth.css';
@@ -71,10 +72,10 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     } catch (err) {
       setCaptcha(null);
       // 后端没装 svg-captcha 时 /auth/captcha 会 500。
-      // 这不该拦住登录：后端校验的是「提交上来的字符串」，不是 captcha_id。
+      // 此时拿不到 captcha_id，验证码无法校验，只能提示用户重试。
       setCaptchaNotice(
         err instanceof ApiError && err.status >= 500
-          ? '验证码图片暂不可用（后端 /auth/captcha 报错），开发环境直接输入 aaaa 即可登录'
+          ? '验证码图片加载失败，请点击「换一张」重试'
           : err instanceof Error
             ? err.message
             : '验证码加载失败'
@@ -113,17 +114,17 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     setNotice('');
     if (!ACCOUNT_PATTERN.test(account.trim())) return setError('请输入手机号或账号（4–64 位，字母开头）');
     if (password.length < 8 || password.length > 72) return setError('密码长度需为 8–72 位');
-    // 注意：这里不要求验证码图片加载成功——图片只是给人看的，
-    // 后端校验的是我们提交的 captcha_code，接口挂了也要能登（开发环境输入 aaaa）。
-    if (captchaCode.length < 4) return setError('请输入图形验证码（开发环境固定填 aaaa）');
+    // 后端按 captcha_id 校验这张图的答案（一次性消费），所以必须带上当前图片的 id
+    if (!captcha?.captcha_id) return setError('图形验证码未加载，请点击验证码图片刷新后重试');
+    if (captchaCode.trim().length < 4) return setError('请输入图中的 4 位验证码（不区分大小写）');
 
     setBusy(true);
     try {
       const user = await loginByAccount({
         account: account.trim(),
         password,
-        captchaCode,
-        captchaId: captcha?.captcha_id
+        captchaCode: captchaCode.trim(),
+        captchaId: captcha.captcha_id
       });
       onLogin(user);
     } catch (err) {
@@ -151,7 +152,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
       const result = await sendSmsCode(mobile, 'login');
       setSmsHint(
         result.devCode
-          ? `开发环境验证码：${result.devCode}（也兼容固定 123456）`
+          ? `开发环境未接短信通道，本次验证码：${result.devCode}（5 分钟内有效）`
           : result.hint ?? '验证码已发送，请查收短信'
       );
       countdown.start();
@@ -279,17 +280,15 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             <label className="auth-label" htmlFor="auth-password">
               密码
             </label>
-            <input
+            <PasswordInput
               id="auth-password"
-              className="auth-input"
-              type="password"
               autoComplete="current-password"
               minLength={8}
               maxLength={72}
               placeholder="请输入密码"
               value={password}
               disabled={busy}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={setPassword}
             />
           </div>
 
@@ -300,11 +299,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             onRefresh={() => void refreshCaptcha()}
             loading={captchaLoading}
             disabled={busy}
-            devHint={
-              captcha?.dev_code
-                ? `开发环境：后端当前固定校验 aaaa（本次图片答案 ${captcha.dev_code}，联调通后由后端改为按 captcha_id 校验）`
-                : captchaNotice || undefined
-            }
+            devHint={captchaNotice || undefined}
           />
 
           {error ? (
@@ -368,34 +363,30 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             <label className="auth-label" htmlFor="auth-register-password">
               密码
             </label>
-            <input
+            <PasswordInput
               id="auth-register-password"
-              className="auth-input"
-              type="password"
               autoComplete="new-password"
               minLength={8}
               maxLength={72}
               placeholder="8–72 位，建议字母 + 数字"
               value={password}
               disabled={busy}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={setPassword}
             />
           </div>
           <div className="auth-field">
             <label className="auth-label" htmlFor="auth-register-confirm">
               确认密码
             </label>
-            <input
+            <PasswordInput
               id="auth-register-confirm"
-              className="auth-input"
-              type="password"
               autoComplete="new-password"
               minLength={8}
               maxLength={72}
               placeholder="再输入一次密码"
               value={confirmPassword}
               disabled={busy}
-              onChange={(event) => setConfirmPassword(event.target.value)}
+              onChange={setConfirmPassword}
             />
           </div>
 

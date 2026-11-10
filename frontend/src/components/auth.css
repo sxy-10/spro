@@ -131,6 +131,58 @@
   min-width: 0;
 }
 
+/* 密码框：输入框 + 右侧「显示/隐藏」眼睛按钮 */
+.auth-password-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.auth-password-row .auth-input {
+  width: 100%;
+  padding-right: 44px;
+}
+
+.auth-eye-button {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #7b8d82;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.auth-eye-button svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.auth-eye-button:hover:not(:disabled) {
+  background: #eef5f0;
+  color: #2f7a3d;
+}
+
+.auth-eye-button:focus-visible {
+  outline: 2px solid rgba(75, 154, 95, 0.45);
+  outline-offset: 1px;
+}
+
+.auth-eye-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* 图形验证码图片 */
 .auth-captcha-image {
   width: 92px;

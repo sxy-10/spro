@@ -28,10 +28,11 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 
 /* ------------------------------------------------------------------ *
  * 组员4 补丁：图形验证码 / 短信验证码 / 令牌刷新
- * 1. 图形验证码改为「服务端存 captcha_id → code，5 分钟过期，校验即消费」，
- *    不再写死 aaaa（未带 X-Captcha-Id 时保留 aaaa 后门，供 e2e 与接口自测）。
- * 2. 短信验证码新增 /auth/sms/send 下发 6 位码，登录/重置密码按码校验；
- *    开发环境仍兼容固定 123456（既有联调脚本与文档依赖它）。
+ * 1. 图形验证码为「服务端存 captcha_id → code，5 分钟过期，校验即消费」，
+ *    登录时必须带 X-Captcha-Id，按图片上的字符校验（忽略大小写与首尾空格）。
+ *    已移除历史遗留的固定 aaaa 后门——它让验证码形同虚设。
+ * 2. 短信验证码由 /auth/sms/send 下发 6 位随机码，登录/重置密码按该码校验；
+ *    同样已移除固定 123456 后门，只有真正收到的码才能通过。
  * 3. 新增 /auth/refresh，供前端 401 时静默换票（滑动续期，复用 api_session）。
  * 单体演示用内存表足够；多实例部署请换成 Redis（ioredis 已在依赖内）。
  * ------------------------------------------------------------------ */
@@ -39,8 +40,6 @@ const captchaStore = new Map<string, { code: string; expiresAt: number }>();
 const smsCodeStore = new Map<string, { code: string; expiresAt: number }>();
 const CAPTCHA_TTL_MS = 5 * 60 * 1000;
 const SMS_TTL_MS = 5 * 60 * 1000;
-const DEV_CAPTCHA_CODE = 'aaaa';
-const DEV_SMS_CODE = '123456';
 const codeStores = [captchaStore, smsCodeStore];
 const sweepTimer = setInterval(() => {
   const now = Date.now();
@@ -50,17 +49,20 @@ const sweepTimer = setInterval(() => {
 }, 60_000);
 sweepTimer.unref();
 
-/** 校验并消费一次性验证码；开发环境额外放行固定后门值 */
+/**
+ * 校验并消费一次性验证码。
+ * 一次性：无论对错都立即删除该 key，避免同一张图/同一个码被反复尝试（防重放）。
+ * 图形验证码按图片字符比对，统一转小写后比较，因此大小写都能通过。
+ */
 const consumeCode = (
   store: Map<string, { code: string; expiresAt: number }>,
   key: string,
-  code: string,
-  devFallback: string
+  code: string
 ): boolean => {
   const record = store.get(key);
   store.delete(key);
-  if (record && record.expiresAt > Date.now() && record.code === code.toLowerCase()) return true;
-  return process.env.NODE_ENV !== 'production' && code.toLowerCase() === devFallback;
+  if (!record || record.expiresAt <= Date.now()) return false;
+  return record.code === code.trim().toLowerCase();
 };
 
 /** 签发 access token + refresh token（refresh 用 typ 标记，避免被当成 access token 使用） */
@@ -123,8 +125,8 @@ api.post('/auth/login/sms', run(async (req, res) => {
     await rateLimit(`auth:${req.ip}`, 10);
     await checkLoginLockout(body.mobile);
 
-    // 短信验证码：优先校验 /auth/sms/send 下发的码，开发环境兼容固定 123456
-    if (!consumeCode(smsCodeStore, `${body.mobile}:login`, body.sms_code, DEV_SMS_CODE)) {
+    // 短信验证码：只认 /auth/sms/send 实际下发的 6 位码（已移除固定 123456 后门）
+    if (!consumeCode(smsCodeStore, `${body.mobile}:login`, body.sms_code)) {
         await recordLoginFailure(body.mobile);
         throw new ApiError(400, 10001, '验证码错误或已过期');
     }
@@ -151,8 +153,8 @@ api.post('/auth/reset-password', run(async (req, res) => {
     const body = z.object({ mobile, sms_code: z.string().length(6), new_password: z.string().min(8).max(72) }).strict().parse(req.body);
     await rateLimit(`auth:${req.ip}`, 10);
 
-    // 短信验证码：与登录共用一套下发/校验逻辑（scene=reset）
-    if (!consumeCode(smsCodeStore, `${body.mobile}:reset`, body.sms_code, DEV_SMS_CODE)) {
+    // 短信验证码：与登录共用一套下发/校验逻辑（scene=reset），只认实际下发的码
+    if (!consumeCode(smsCodeStore, `${body.mobile}:reset`, body.sms_code)) {
         throw new ApiError(400, 10001, '验证码错误或已过期');
     }
 
@@ -219,13 +221,13 @@ api.post('/auth/login/account', run(async (req, res) => {
 
     await rateLimit(`auth:${req.ip}`, 10);
 
-    // 图形验证码：按 captcha_id 校验，一次性消费。
-    // captcha_id 走请求头 X-Captcha-Id（放进请求体会被 .strict() 拒掉）。
+    // 图形验证码：必须带 captcha_id（请求头 X-Captcha-Id；放进请求体会被 .strict() 拒掉），
+    // 按该 id 对应的图片答案校验，忽略大小写，校验一次即消费。
     const captchaId = String(req.get('X-Captcha-Id') ?? '');
-    const captchaOk = captchaId
-        ? consumeCode(captchaStore, captchaId, body.captcha_code, DEV_CAPTCHA_CODE)
-        : consumeCode(captchaStore, '', body.captcha_code, DEV_CAPTCHA_CODE);
-    if (!captchaOk) {
+    if (!captchaId) {
+        throw new ApiError(400, 10001, '图形验证码已失效，请点击图片刷新后重试');
+    }
+    if (!consumeCode(captchaStore, captchaId, body.captcha_code)) {
         throw new ApiError(400, 10001, '图形验证码错误或已过期');
     }
 

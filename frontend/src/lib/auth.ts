@@ -5,7 +5,7 @@
  * 对应后端（组员3）已交付的 4 个接口：
  *   POST /v1/auth/login/account  统一账号登录（account + password + captcha_code）
  *   GET  /v1/auth/captcha        图形验证码（captcha_id + captcha_image + dev_code）
- *   POST /v1/auth/login/sms      短信登录（mobile + sms_code，开发环境固定 123456）
+ *   POST /v1/auth/login/sms      短信登录（mobile + sms_code，码由 /v1/auth/sms/send 下发）
  *   POST /v1/auth/reset-password 重置密码（mobile + sms_code + new_password）
  * 另有旧的 POST /v1/auth/login（mobile + password，不带验证码）用于「注册后自动登录」。
  */
@@ -86,9 +86,9 @@ export const registerAccount = (mobile: string, password: string) =>
 
 /**
  * 发送短信验证码。
- * 后端（组员3）现状：开发环境由 /auth/sms/send 生成 6 位码并原样回传 dev_code，
- * 登录/重置密码时按码校验，同时兼容固定 123456。
- * 若该接口尚未实现（401/403/404/405/501），降级成开发提示，并让调用方照常启动 60 秒倒计时。
+ * 后端 /auth/sms/send 生成 6 位随机码并保存（5 分钟有效），开发环境把码原样回传 dev_code
+ * 供页面显示；登录/重置密码只按这个码校验，没有任何固定兜底码。
+ * 若该接口尚未实现（401/403/404/405/501），降级成提示，并让调用方照常启动 60 秒倒计时。
  */
 export async function sendSmsCode(mobile: string, scene: 'login' | 'reset' = 'login'): Promise<SmsSendResult> {
   try {
@@ -99,7 +99,7 @@ export async function sendSmsCode(mobile: string, scene: 'login' | 'reset' = 'lo
     return { sent: true, devCode: data?.dev_code };
   } catch (error) {
     if (error instanceof ApiError && [401, 403, 404, 405, 501].includes(error.status)) {
-      return { sent: false, hint: '开发环境未接短信通道，验证码固定为 123456' };
+      return { sent: false, hint: '短信服务暂不可用，请改用密码登录' };
     }
     throw error;
   }
