@@ -4,6 +4,7 @@ import cors from 'cors';
 import compression from 'compression';
 import { randomUUID } from 'node:crypto';
 import { api } from './api/router.js';
+import { seckillRouter } from './api/seckillRouter.js';
 import { ApiError, errors } from './api/core.js';
 import passport from './auth/passport.js';
 
@@ -42,5 +43,6 @@ app.use((req, _res, next) => {
 });
 app.use(passport.initialize());
 app.use('/v1', api);
+app.use('/v1', seckillRouter);
 app.use((_req, _res, next) => next(new ApiError(404,20016,'接口不存在')));
 app.use(errors);
