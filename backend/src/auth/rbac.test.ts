@@ -233,9 +233,18 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
     if (sql.includes('FROM sys_user_role ur') && !sql.includes('user_count')) {
       return [persona.roles.map((code) => ({ code }))];
     }
+    if (sql.includes('COUNT(*) AS total FROM chat_session')) return [[{ total: 0 }]];
+    if (sql.includes('FROM chat_session')) return [[]];
+    if (sql.includes('COUNT(*) AS total FROM tour_order')) return [[{ total: 0 }]];
+    if (sql.includes('FROM tour_order') && sql.includes('COUNT(*) AS order_count')) {
+      return [[{ order_count: 0, paid_order_count: 0, canceled_order_count: 0, revenue_rmb: '0.00' }]];
+    }
+    if (sql.includes('FROM tour_order')) return [[]];
+    if (sql.includes('SELECT COUNT(*) AS route_count')) {
+      return [[{ route_count: 0, on_sale_route_count: 0, visitor_count: 0, plans_generated_count: 0 }]];
+    }
     if (sql.includes('COUNT(*) total FROM travel_product')) return [[{ total: 0 }]];
     if (sql.includes('FROM travel_product')) return [[]];
-    if (sql.includes('FROM tour_order')) return [[{ order_count: 0, paid_order_count: 0 }]];
     if (sql.includes('COUNT(*) total FROM sys_role')) return [[{ total: 2 }]];
     if (sql.includes('FROM sys_role')) {
       return [[
@@ -272,6 +281,10 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
   };
 
   try {
+    const health = await call('/health', false);
+    assert.equal(health.status, 200);
+    assert.equal(health.body.data.status, 'ok');
+
     // 1. 无 token → 401 + 20012（契约硬要求：401 必须与 403/20013 区分开）
     const anonymous = await call('/admin/routes', false);
     assert.equal(anonymous.status, 401);
@@ -284,15 +297,25 @@ test('HTTP 链路：游客 403 / 旅行社管理员 200 / 无 token 401', async 
     assert.equal(denied.body.code, PERMISSION_DENIED_CODE);
     assert.equal(denied.body.message, '权限不足，禁止访问');
     assert.deepEqual(Object.keys(denied.body).sort(), ['code', 'data', 'message', 'trace_id']);
+    const chatDenied = await call('/chat/sessions');
+    assert.equal(chatDenied.status, 403);
+    assert.equal(chatDenied.body.code, PERMISSION_DENIED_CODE);
 
     // 3. 旅行社管理员持有 route:line:query → 放行（关键：不再依赖 sys_user.role = 'ADMIN'）
     switchPersona({ role: 'TOURIST', roles: ['AGENCY_ADMIN'], permissions: ['route:line:query', 'order:manage:query'] });
     const allowed = await call('/admin/routes');
     assert.equal(allowed.status, 200);
     assert.equal(allowed.body.code, 0);
+    assert.equal((await call('/admin/orders')).status, 200);
 
     // 4. 同一身份访问 analytics 也应有权限（order:manage:query）
     assert.equal((await call('/admin/analytics')).status, 200);
+
+    // 游客被明确授予聊天读取权限后，业务查询放行。
+    switchPersona({ role: 'TOURIST', roles: ['TOURIST'], permissions: ['chat:session:query'] });
+    const sessions = await call('/chat/sessions');
+    assert.equal(sessions.status, 200);
+    assert.deepEqual(sessions.body.data.list, []);
 
     // 5. RBAC 管理接口同样受权限码保护：无 system:role:query 时 403
     const rolesDenied = await call('/roles');

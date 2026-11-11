@@ -1,7 +1,7 @@
 /**
  * 数据库与配置体检（只读，不建表、不改数据）
  *
- * 作用：回答「我到底有没有按顺序执行过 01/04/05/06」这个问题，
+ * 作用：回答「我到底有没有按顺序执行过 01/04/05/06/08」这个问题，
  *      并把「缺哪一段、下一条命令是什么」直接打印出来。
  *
  * 运行：cd backend && npm run db:check
@@ -47,6 +47,10 @@ const SCRIPT_TABLES: { file: string; tables: string[] }[] = [
   {
     file: '06_route_stock.sql',
     tables: ['route_stock']
+  },
+  {
+    file: '08_rbac_complete.sql',
+    tables: ['sys_audit_log']
   }
 ];
 
@@ -127,7 +131,7 @@ async function checkDatabase(): Promise<boolean> {
     );
     const existing = new Set(rows.map((row) => String(row.name)));
 
-    console.log('\n=== 3. 四段脚本的执行情况 ===');
+    console.log('\n=== 3. 五段脚本的执行情况 ===');
     let allTables = true;
     for (const script of SCRIPT_TABLES) {
       const missing = script.tables.filter((table) => !existing.has(table));
@@ -146,22 +150,28 @@ async function checkDatabase(): Promise<boolean> {
       console.log(`  mysql -u ${DB.user} -p < ../database/04_api_v1.sql`);
       console.log(`  mysql -u ${DB.user} -p < ../database/05_rbac_schema.sql`);
       console.log(`  mysql -u ${DB.user} -p < ../database/06_route_stock.sql`);
+      console.log(`  mysql -u ${DB.user} -p < ../database/08_rbac_complete.sql`);
       return false;
     }
 
-    // 表都在，再看种子数据：e2e 里写死了 3 个角色、35 条权限、权限 id 101/201/204
+    // 表都在，再看种子数据：e2e 依赖 3 个角色、44 条权限和 6 个游客按钮权限。
     console.log('\n=== 4. RBAC 种子数据（e2e 断言依赖）===');
     const [counts] = await conn.query<mysql.RowDataPacket[]>(
       `SELECT
          (SELECT COUNT(*) FROM sys_role) AS roles,
          (SELECT COUNT(*) FROM sys_permission) AS perms,
          (SELECT COUNT(*) FROM sys_role_permission) AS role_perms,
+         (SELECT COUNT(*) FROM sys_role_permission rp
+            JOIN sys_role r ON r.id = rp.role_id
+            JOIN sys_permission p ON p.id = rp.permission_id
+           WHERE r.code = 'TOURIST' AND p.resource_type = 'BUTTON') AS tourist_permissions,
          (SELECT COUNT(*) FROM travel_agency WHERE id = 1) AS agency1`
     );
     const c = counts[0];
     const expect: [string, number, number, string][] = [
       ['sys_role 应有 3 个内置角色', Number(c.roles), 3, '05_rbac_schema.sql'],
-      ['sys_permission 应有 35 条权限', Number(c.perms), 35, '05_rbac_schema.sql']
+      ['sys_permission 应有 44 条权限', Number(c.perms), 44, '08_rbac_complete.sql'],
+      ['TOURIST 应有 6 个业务按钮权限', Number(c.tourist_permissions), 6, '08_rbac_complete.sql']
     ];
     let seedsOk = true;
     for (const [label, actual, expected, source] of expect) {

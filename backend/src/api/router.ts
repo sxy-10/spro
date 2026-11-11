@@ -13,6 +13,7 @@ import { ApiError, id, mobile, utc, money, reply, run, page, list, write, secret
 import { authenticateJwt } from '../auth/passport.js';
 import { requirePermission } from '../auth/rbac.js';
 import { rbac } from './rbacRouter.js';
+import { chatRouter } from './chatRouter.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
 
 export const api = Router();
@@ -69,6 +70,7 @@ const issueTokens = (userId: string, sessionId: string) => ({
   expires_in: 1800
 });
 
+api.get('/health', (_req, res) => reply(res, { status: 'ok' }));
 api.use((req, _res, next) => { rateLimit(`ip:${req.ip}`, 120).then(() => next(), next); });
 
 api.post('/auth/register', run(async (req, res) => {
@@ -309,6 +311,7 @@ api.post('/auth/refresh', run(async (req, res) => {
 
 api.use(authenticateJwt);
 api.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store'); rateLimit(`user:${res.locals.user.id}`, 90).then(() => next(), next); });
+api.use('/chat', chatRouter);
 // RBAC 管理接口（角色/权限/当前用户），见 api/rbacRouter.ts
 api.use(rbac);
 api.post('/auth/logout', run(async (req, res) => {
@@ -464,10 +467,97 @@ api.post('/admin/routes', requirePermission('route:line:add'), run(async(req,res
     const no=generateUlid();
     await conn.query(`INSERT INTO travel_product(product_no,agency_id,title,destination,default_days,style_tag,base_price_rmb,status,created_by) VALUES (?,?,?,?,?,?,?,'ON_SALE',?)`,[no,res.locals.user.agency_id,body.title,body.destination,body.default_days,body.style_tag,body.base_price_rmb,res.locals.user.id]);
     const [rows]=await conn.query<RowDataPacket[]>(`SELECT ${routeFields} FROM travel_product WHERE product_no=?`,[no]);
+    await conn.query(
+      `INSERT INTO sys_audit_log
+        (actor_id, action, resource_type, resource_id, request_method, request_path, after_data, trace_id)
+       VALUES (?, 'CREATE', 'ROUTE', ?, ?, ?, ?, ?)`,
+      [res.locals.user.id, String(rows[0].id), req.method, req.originalUrl, JSON.stringify(rows[0]), res.locals.traceId]
+    );
     return {data:rows[0],status:201};
   });
 }));
-api.get('/admin/analytics', requirePermission('order:manage:query'), run(async(_req,res)=>{
-  const [rows]=await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS order_count,SUM(status='PAID') AS paid_order_count FROM tour_order WHERE product_id IN (SELECT id FROM travel_product WHERE agency_id=?)`,[res.locals.user.agency_id]);
-  reply(res,rows[0]);
+api.patch('/admin/routes/:id', requirePermission('route:line:update'), run(async(req,res)=>{
+  const routeId=id.parse(req.params.id);
+  const body=z.object({
+    title:text(100).optional(),
+    destination:text(100).optional(),
+    default_days:z.number().int().min(1).max(30).optional(),
+    style_tag:text(30).nullable().optional(),
+    base_price_rmb:money.optional(),
+    description:z.string().max(5000).nullable().optional(),
+    status:z.enum(['DRAFT','ON_SALE','OFF_SALE']).optional()
+  }).strict().refine(value=>Object.keys(value).length>0,'至少提供一个待修改字段').parse(req.body);
+  await write(req,res,async conn=>{
+    const [existing]=await conn.query<RowDataPacket[]>(
+      'SELECT * FROM travel_product WHERE id=? AND agency_id=? FOR UPDATE',
+      [routeId,res.locals.user.agency_id]
+    );
+    if(!existing.length) throw new ApiError(404,20016,'线路不存在');
+
+    const columns:Record<string,string> = {
+      title:'title',
+      destination:'destination',
+      default_days:'default_days',
+      style_tag:'style_tag',
+      base_price_rmb:'base_price_rmb',
+      description:'description',
+      status:'status'
+    };
+    const updates=Object.entries(body);
+    await conn.query(
+      `UPDATE travel_product SET ${updates.map(([field])=>`${columns[field]}=?`).join(',')} WHERE id=? AND agency_id=?`,
+      [...updates.map(([,value])=>value),routeId,res.locals.user.agency_id]
+    );
+    const [updated]=await conn.query<RowDataPacket[]>(
+      `SELECT ${routeFields} FROM travel_product WHERE id=? AND agency_id=?`,
+      [routeId,res.locals.user.agency_id]
+    );
+    await conn.query(
+      `INSERT INTO sys_audit_log
+        (actor_id, action, resource_type, resource_id, request_method, request_path, before_data, after_data, trace_id)
+       VALUES (?, 'UPDATE', 'ROUTE', ?, ?, ?, ?, ?, ?)`,
+      [res.locals.user.id, routeId, req.method, req.originalUrl, JSON.stringify(existing[0]), JSON.stringify(updated[0]), res.locals.traceId]
+    );
+    return {data:updated[0]};
+  });
+}));
+api.get('/admin/orders', requirePermission('order:manage:query'), run(async(req,res)=>{
+  const p=page(req.query,['created_at','total_amount'],{status:z.enum(['CREATED','PAID','CANCELED','COMPLETED','REFUNDED']).optional()});
+  const status=({CREATED:'PENDING',CANCELED:'CANCELLED'} as Record<string,string>)[p.status]??p.status;
+  const where=`FROM tour_order WHERE product_id IN (SELECT id FROM travel_product WHERE agency_id=?)${status?' AND status=?':''}`;
+  const result=await list(
+    pool,
+    `SELECT ${orderFields},contact_phone ${where}`,
+    `SELECT COUNT(*) AS total ${where}`,
+    [res.locals.user.agency_id,...(status?[status]:[])],
+    p
+  );
+  reply(res,{
+    ...result,
+    list:result.list.map(row=>{
+      const {contact_phone,...order}=row;
+      return {...order,contact_mobile:maskMobile(contact_phone)};
+    })
+  });
+}));
+api.get('/admin/analytics', requirePermission('order:manage:query'), run(async(req,res)=>{
+  const agencyId=res.locals.user.agency_id;
+  const [orderRows]=await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS order_count,
+            COALESCE(SUM(status='PAID'),0) AS paid_order_count,
+            COALESCE(SUM(status='CANCELLED'),0) AS canceled_order_count,
+            COALESCE(SUM(CASE WHEN status IN ('PAID','COMPLETED') THEN total_amount ELSE 0 END),0) AS revenue_rmb
+       FROM tour_order
+      WHERE product_id IN (SELECT id FROM travel_product WHERE agency_id=?)`,
+    [agencyId]
+  );
+  const [routeRows]=await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS route_count,
+            COALESCE(SUM(status='ON_SALE'),0) AS on_sale_route_count,
+            COALESCE(SUM(visitor_count),0) AS visitor_count,
+            COALESCE(SUM(plans_generated_count),0) AS plans_generated_count
+       FROM travel_product WHERE agency_id=?`,
+    [agencyId]
+  );
+  reply(res,{...orderRows[0],...routeRows[0]});
 }));

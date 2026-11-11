@@ -16,6 +16,7 @@ test('v1 HTTP contract, ownership, signing, idempotency and order state', async 
   let failInsert=false;
   const query=async(sql:string,args:any[]=[])=>{
     if(sql.includes('api_rate_limit')) return [sql.startsWith('SELECT')?[{hits:1}]:{}];
+    if(sql.includes('AS role_code')||sql.includes('AS permission_code')) return [[]];
     if(sql.includes('JOIN sys_user')) return [[{id:'1',role:'TOURIST',agency_id:null}]];
     if(sql.startsWith('INSERT IGNORE INTO api_idempotency')) { if(!cache.has(args[0])) cache.set(args[0],{request_hash:args[1]}); return [{}]; }
     if(sql.startsWith('SELECT * FROM api_idempotency')) return [[cache.get(args[0])]];
@@ -68,6 +69,9 @@ test('v1 HTTP contract, ownership, signing, idempotency and order state', async 
     return {status:response.status,body:response.status===204?null:await response.json() as any,headers:response.headers};
   };
   try {
+    const health = await call('/health', 'GET', undefined, { auth: false });
+    assert.equal(health.status, 200);
+    assert.equal(health.body.data.status, 'ok');
     assert.equal((await call('/plans','GET',undefined,{auth:false})).status,401);
     assert.equal((await call('/users/2')).status,403);
     assert.equal((await call('/admin/routes')).status,403);

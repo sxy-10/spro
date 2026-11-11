@@ -242,7 +242,7 @@ cd backend
 npm run db:check
 ```
 
-它会检查 `.env` 是否齐全、MySQL 是否连得上、库是否存在，并按 01 → 04 → 05 → 06 反推「缺哪张表」，最后给出要补的命令。数据库不存在时会直接告诉你「连 01_schema.sql 都没执行过」。
+它会检查 `.env` 是否齐全、MySQL 是否连得上、库是否存在，并按 01 → 04 → 05 → 06 → 08 反推「缺哪张表/种子数据」，最后给出要补的命令。数据库不存在时会直接告诉你「连 01_schema.sql 都没执行过」。
 
 **建库顺序**（在项目根目录执行，顺序不能颠倒）：
 
@@ -251,6 +251,7 @@ mysql -u root -p --default-character-set=utf8mb4 < database/01_schema.sql
 mysql -u root -p --default-character-set=utf8mb4 < database/04_api_v1.sql
 mysql -u root -p --default-character-set=utf8mb4 < database/05_rbac_schema.sql
 mysql -u root -p --default-character-set=utf8mb4 < database/06_route_stock.sql
+mysql -u root -p --default-character-set=utf8mb4 < database/08_rbac_complete.sql
 ```
 
 > Windows 下必须带 `--default-character-set=utf8mb4`。mysql 客户端默认按 GBK 解码，而 05 的种子数据含中文角色名/权限名，会报 `ERROR 1366 Incorrect string value: '\xAE\xA2' for column 'name'`——不是脚本坏了，是客户端编码不对。
@@ -332,6 +333,16 @@ curl -s -H "Authorization: Bearer $AGENCY_TOKEN" http://localhost:3001/v1/roles
 - **数据级权限**：模型加 `r.dom`（机构 ID），`p = sub, dom, obj, act`，把 `agency_id` 隔离从 handler 里上移到策略层；
 - **多实例一致**：把策略版本号放 Redis，写操作后 `INCR`，各实例按版本号失效，替代 30s TTL 兜底；
 - **策略审计**：`rbac.denied` 日志已带 `user_id / required / missing / trace_id`，可直接接入日志平台做越权告警。
+
+---
+
+## 十二、组员2补充任务（授权后端 + 补接口）
+
+`database/08_rbac_complete.sql` 是增量脚本，可重复执行：创建 `sys_audit_log`，新增 6 个按钮权限（聊天查询/发送、创建行程、预订创建/查询），为 TOURIST 分配这 6 项，并把新增权限并入 SUPER_ADMIN。既有数据库只执行本脚本，不要重跑带 DROP 的 `05_rbac_schema.sql`。
+
+当前 8 个受守卫保护的业务入口为 5 个管理接口（线路列表/创建/修改、订单列表、统计）和 3 个聊天接口（会话列表、消息历史、创建会话并写入首条消息）。`GET /health` 在登录与限流中间件前注册，匿名探活不依赖 MySQL。个人线路/订单仍按已有的用户 ID 所有权隔离。
+
+管理端 `PATCH /admin/routes/:id` 和新建线路均在写事务内记录审计事件；线路修改同时校验 `agency_id`，订单列表和分析数据也仅聚合当前机构数据。订单列表中的联系电话仅返回脱敏值。更新后的 E2E 预期为 44 个权限资源、31 个按钮权限（超级管理员）、6 个游客按钮权限。
 
 ---
 
