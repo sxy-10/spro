@@ -9,6 +9,7 @@ import { AUTH_CONFIG } from '../lib/config';
 import { ApiError } from '../lib/http';
 import { resetPassword, sendSmsCode } from '../lib/auth';
 import { useCountdown } from '../hooks/useCountdown';
+import { PasswordInput } from './PasswordInput';
 import { SmsCodeField } from './SmsCodeField';
 
 interface ResetPasswordScreenProps {
@@ -47,7 +48,7 @@ export function ResetPasswordScreen({ onBack, onSuccess, initialMobile = '' }: R
       const result = await sendSmsCode(mobile, 'reset');
       setHint(
         result.devCode
-          ? `开发环境验证码：${result.devCode}（也兼容固定 123456）`
+          ? `开发环境未接短信通道，本次验证码：${result.devCode}（5 分钟内有效）`
           : result.hint ?? '验证码已发送，请查收短信'
       );
       countdown.start();
@@ -126,17 +127,15 @@ export function ResetPasswordScreen({ onBack, onSuccess, initialMobile = '' }: R
           <label className="auth-label" htmlFor="auth-new-password">
             新密码
           </label>
-          <input
+          <PasswordInput
             id="auth-new-password"
-            className="auth-input"
-            type="password"
             autoComplete="new-password"
             minLength={8}
             maxLength={72}
             placeholder="8–72 位，建议字母 + 数字"
             value={newPassword}
             disabled={busy}
-            onChange={(event) => setNewPassword(event.target.value)}
+            onChange={setNewPassword}
           />
         </div>
 
@@ -144,17 +143,15 @@ export function ResetPasswordScreen({ onBack, onSuccess, initialMobile = '' }: R
           <label className="auth-label" htmlFor="auth-confirm-password">
             确认新密码
           </label>
-          <input
+          <PasswordInput
             id="auth-confirm-password"
-            className="auth-input"
-            type="password"
             autoComplete="new-password"
             minLength={8}
             maxLength={72}
             placeholder="再输入一次新密码"
             value={confirmPassword}
             disabled={busy}
-            onChange={(event) => setConfirmPassword(event.target.value)}
+            onChange={setConfirmPassword}
           />
         </div>
 

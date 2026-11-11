@@ -1,15 +1,21 @@
 import React from 'react';
 import { BookingScreen } from './BookingScreen';
-import { AuthPermission } from './AuthPermission';
 
 interface ProfileScreenProps {
   onOpenAdminConsole: () => void;
   nickname: string;
   isAdmin: boolean;
   onLogout: () => void;
+  defaultMobile?: string;
 }
 
-export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onOpenAdminConsole, nickname, isAdmin, onLogout }) => {
+export const ProfileScreen: React.FC<ProfileScreenProps> = ({
+  onOpenAdminConsole,
+  nickname,
+  isAdmin,
+  onLogout,
+  defaultMobile
+}) => {
   return (
     <div className="screen-profile-container">
       {/* 顶部标题栏 */}
@@ -76,16 +82,34 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onOpenAdminConsole
         </div>
       </div>
 
+      {/* 线路预订卡片 */}
+      <BookingScreen defaultMobile={defaultMobile} />
+
       {/* 管理中台快捷入口 */}
-      {isAdmin && <AuthPermission code="route:line:query"><div className="profile-admin-entrance-card" onClick={onOpenAdminConsole}>
-        <div className="admin-entrance-left">
-          <div className="entrance-title">旅行社智能体管理中台</div>
-          <div className="entrance-desc">查看全网行程并发、转化漏斗与人设引擎</div>
+      {isAdmin && (
+        <div
+          className="profile-admin-entrance-card"
+          onClick={onOpenAdminConsole}
+          role="button"
+          tabIndex={0}
+        >
+          <div className="admin-entrance-left">
+            <div className="entrance-title">旅行社智能体管理中台</div>
+            <div className="entrance-desc">查看全网行程并发、转化漏斗与人设引擎</div>
+          </div>
+          <div className="entrance-arrow">➔</div>
         </div>
-        <div className="entrance-arrow">➔</div>
-      </div></AuthPermission>}
-      <button type="button" onClick={onLogout}>退出登录</button>
-      <BookingScreen />
+      )}
+
+      {/* 退出登录操作按钮 */}
+      <button type="button" className="profile-logout-button" onClick={onLogout}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+          <polyline points="16 17 21 12 16 7" />
+          <line x1="21" y1="12" x2="9" y2="12" />
+        </svg>
+        <span>退出登录</span>
+      </button>
     </div>
   );
 };

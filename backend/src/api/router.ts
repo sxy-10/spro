@@ -14,7 +14,10 @@ import { authenticateJwt } from '../auth/passport.js';
 import { requirePermission } from '../auth/rbac.js';
 import { rbac } from './rbacRouter.js';
 import { chatRouter } from './chatRouter.js';
+import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
+import { bearerToken, dropCachedUser } from '../auth/sessionCache.js';
+import { listDict, isDictType } from '../db/dict.js';
 
 export const api = Router();
 const planner = new TravelPlannerAgent();
@@ -28,10 +31,11 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 
 /* ------------------------------------------------------------------ *
  * 组员4 补丁：图形验证码 / 短信验证码 / 令牌刷新
- * 1. 图形验证码改为「服务端存 captcha_id → code，5 分钟过期，校验即消费」，
- *    不再写死 aaaa（未带 X-Captcha-Id 时保留 aaaa 后门，供 e2e 与接口自测）。
- * 2. 短信验证码新增 /auth/sms/send 下发 6 位码，登录/重置密码按码校验；
- *    开发环境仍兼容固定 123456（既有联调脚本与文档依赖它）。
+ * 1. 图形验证码为「服务端存 captcha_id → code，5 分钟过期，校验即消费」，
+ *    登录时必须带 X-Captcha-Id，按图片上的字符校验（忽略大小写与首尾空格）。
+ *    已移除历史遗留的固定 aaaa 后门——它让验证码形同虚设。
+ * 2. 短信验证码由 /auth/sms/send 下发 6 位随机码，登录/重置密码按该码校验；
+ *    同样已移除固定 123456 后门，只有真正收到的码才能通过。
  * 3. 新增 /auth/refresh，供前端 401 时静默换票（滑动续期，复用 api_session）。
  * 单体演示用内存表足够；多实例部署请换成 Redis（ioredis 已在依赖内）。
  * ------------------------------------------------------------------ */
@@ -39,8 +43,6 @@ const captchaStore = new Map<string, { code: string; expiresAt: number }>();
 const smsCodeStore = new Map<string, { code: string; expiresAt: number }>();
 const CAPTCHA_TTL_MS = 5 * 60 * 1000;
 const SMS_TTL_MS = 5 * 60 * 1000;
-const DEV_CAPTCHA_CODE = 'aaaa';
-const DEV_SMS_CODE = '123456';
 const codeStores = [captchaStore, smsCodeStore];
 const sweepTimer = setInterval(() => {
   const now = Date.now();
@@ -50,17 +52,20 @@ const sweepTimer = setInterval(() => {
 }, 60_000);
 sweepTimer.unref();
 
-/** 校验并消费一次性验证码；开发环境额外放行固定后门值 */
+/**
+ * 校验并消费一次性验证码。
+ * 一次性：无论对错都立即删除该 key，避免同一张图/同一个码被反复尝试（防重放）。
+ * 图形验证码按图片字符比对，统一转小写后比较，因此大小写都能通过。
+ */
 const consumeCode = (
   store: Map<string, { code: string; expiresAt: number }>,
   key: string,
-  code: string,
-  devFallback: string
+  code: string
 ): boolean => {
   const record = store.get(key);
   store.delete(key);
-  if (record && record.expiresAt > Date.now() && record.code === code.toLowerCase()) return true;
-  return process.env.NODE_ENV !== 'production' && code.toLowerCase() === devFallback;
+  if (!record || record.expiresAt <= Date.now()) return false;
+  return record.code === code.trim().toLowerCase();
 };
 
 /** 签发 access token + refresh token（refresh 用 typ 标记，避免被当成 access token 使用） */
@@ -78,8 +83,22 @@ api.post('/auth/register', run(async (req, res) => {
   await rateLimit(`auth:${req.ip}`, 10);
   const passwordHash = await hashPassword(body.password);
   await write(req, res, async conn => {
+    const [existing] = await conn.query<RowDataPacket[]>('SELECT id FROM sys_user WHERE phone=? LIMIT 1', [body.mobile]);
+    if (existing.length) throw new ApiError(400, 10001, '该手机号已注册，请直接登录');
     await conn.query('INSERT INTO sys_user(username,phone,password_hash) VALUES (?,?,?)', [body.mobile, body.mobile, passwordHash]);
     const [rows] = await conn.query<RowDataPacket[]>('SELECT CAST(id AS CHAR) AS user_id FROM sys_user WHERE phone=?', [body.mobile]);
+    const newUserId = rows[0]?.user_id;
+    if (newUserId) {
+      try {
+        const [roleRows] = await conn.query<RowDataPacket[]>('SELECT id FROM sys_role WHERE code = ? LIMIT 1', ['TOURIST']);
+        if (roleRows.length > 0) {
+          await conn.query('INSERT IGNORE INTO sys_user_role(user_id, role_id) VALUES (?, ?)', [newUserId, roleRows[0].id]);
+          invalidatePolicyCache('auth.register.tourist');
+        }
+      } catch {
+        // 若 RBAC 基础表尚未初始化，平滑降级保证基础注册成功
+      }
+    }
     return { data: rows[0], status: 201 };
   }, false);
 }));
@@ -98,7 +117,7 @@ api.post('/auth/login', run(async (req, res) => {
   const userId = String(rows[0].id), sessionId = randomUUID();
   const tokens = issueTokens(userId, sessionId);
   await write(req, res, async conn => {
-    await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
+    await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7 DAY))', [sessionId, userId]);
     await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
     return { data: { ...tokens, user_id: userId } };
   }, false);
@@ -110,8 +129,8 @@ api.post('/auth/login/sms', run(async (req, res) => {
     await rateLimit(`auth:${req.ip}`, 10);
     await checkLoginLockout(body.mobile);
 
-    // 短信验证码：优先校验 /auth/sms/send 下发的码，开发环境兼容固定 123456
-    if (!consumeCode(smsCodeStore, `${body.mobile}:login`, body.sms_code, DEV_SMS_CODE)) {
+    // 短信验证码：只认 /auth/sms/send 实际下发的 6 位码（已移除固定 123456 后门）
+    if (!consumeCode(smsCodeStore, `${body.mobile}:login`, body.sms_code)) {
         await recordLoginFailure(body.mobile);
         throw new ApiError(400, 10001, '验证码错误或已过期');
     }
@@ -127,7 +146,7 @@ api.post('/auth/login/sms', run(async (req, res) => {
     const tokens = issueTokens(userId, sessionId);
 
     await write(req, res, async conn => {
-        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
+        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7 DAY))', [sessionId, userId]);
         await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
         return { data: { ...tokens, user_id: userId } };
     }, false);
@@ -138,8 +157,8 @@ api.post('/auth/reset-password', run(async (req, res) => {
     const body = z.object({ mobile, sms_code: z.string().length(6), new_password: z.string().min(8).max(72) }).strict().parse(req.body);
     await rateLimit(`auth:${req.ip}`, 10);
 
-    // 短信验证码：与登录共用一套下发/校验逻辑（scene=reset）
-    if (!consumeCode(smsCodeStore, `${body.mobile}:reset`, body.sms_code, DEV_SMS_CODE)) {
+    // 短信验证码：与登录共用一套下发/校验逻辑（scene=reset），只认实际下发的码
+    if (!consumeCode(smsCodeStore, `${body.mobile}:reset`, body.sms_code)) {
         throw new ApiError(400, 10001, '验证码错误或已过期');
     }
 
@@ -185,7 +204,8 @@ api.get('/auth/captcha', run(async (_req, res) => {
 // 发送短信验证码（开发环境直接把码回传，生产环境需接真实短信网关）
 api.post('/auth/sms/send', run(async (req, res) => {
     const body = z.object({ mobile, scene: z.enum(['login', 'reset']).default('login') }).strict().parse(req.body);
-    await rateLimit(`sms:${req.ip}`, 5);
+    await rateLimit(`sms:ip:${req.ip}`, 10);
+    await rateLimit(`sms:mobile:${body.mobile}`, 3);
     const smsCode = String(Math.floor(100000 + Math.random() * 900000));
     smsCodeStore.set(`${body.mobile}:${body.scene}`, { code: smsCode, expiresAt: Date.now() + SMS_TTL_MS });
     reply(res, {
@@ -205,13 +225,13 @@ api.post('/auth/login/account', run(async (req, res) => {
 
     await rateLimit(`auth:${req.ip}`, 10);
 
-    // 图形验证码：按 captcha_id 校验，一次性消费。
-    // captcha_id 走请求头 X-Captcha-Id（放进请求体会被 .strict() 拒掉）。
+    // 图形验证码：必须带 captcha_id（请求头 X-Captcha-Id；放进请求体会被 .strict() 拒掉），
+    // 按该 id 对应的图片答案校验，忽略大小写，校验一次即消费。
     const captchaId = String(req.get('X-Captcha-Id') ?? '');
-    const captchaOk = captchaId
-        ? consumeCode(captchaStore, captchaId, body.captcha_code, DEV_CAPTCHA_CODE)
-        : consumeCode(captchaStore, '', body.captcha_code, DEV_CAPTCHA_CODE);
-    if (!captchaOk) {
+    if (!captchaId) {
+        throw new ApiError(400, 10001, '图形验证码已失效，请点击图片刷新后重试');
+    }
+    if (!consumeCode(captchaStore, captchaId, body.captcha_code)) {
         throw new ApiError(400, 10001, '图形验证码错误或已过期');
     }
 
@@ -234,7 +254,7 @@ api.post('/auth/login/account', run(async (req, res) => {
     const tokens = issueTokens(userId, sessionId);
 
     await write(req, res, async conn => {
-        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 MINUTE))', [sessionId, userId]);
+        await conn.query('INSERT INTO api_session(session_id,user_id,expires_at) VALUES (?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7 DAY))', [sessionId, userId]);
         await conn.query('UPDATE sys_user SET last_login_at=UTC_TIMESTAMP() WHERE id=?', [userId]);
         return { data: { ...tokens, user_id: userId, login_type: 'unified_account' } };
     }, false);
@@ -268,6 +288,16 @@ api.get('/spots', run(async (req, res) => {
   reply(res, await list(pool, `SELECT id,id AS spot_id,name,city_name,address,rating,opening_hours,cover_image_url,created_at ${where}`, `SELECT COUNT(*) total ${where}`, p.city_name ? [p.city_name] : [], p));
 }));
 
+// 基础字典（组员1 · 阶段一）：民族 / 出发城市 / 旅行风格 / 餐饮偏好 / 季节
+// 公开接口，不需要登录——注册页和筛选器在未登录时也要用。
+// 走 Redis 缓存（dict:{type}，1 小时），所以这里可以放心放开 Cache-Control。
+api.get('/dict/:type', run(async (req, res) => {
+  const type = String(req.params.type ?? '').trim();
+  if (!isDictType(type)) throw new ApiError(400, 10001, '不支持的字典类型');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  reply(res, await listDict(type));
+}));
+
 // 刷新令牌（组员4 补丁）：前端 401 时静默换票。
 // 必须放在 authenticateJwt 之前——换票请求本身是匿名的（只带 refresh_token）。
 api.post('/auth/refresh', run(async (req, res) => {
@@ -297,7 +327,7 @@ api.post('/auth/refresh', run(async (req, res) => {
 
   // 滑动续期：会话再推后 30 分钟（不新增表）
   await pool.query(
-    'UPDATE api_session SET expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 MINUTE) WHERE session_id = ?',
+    'UPDATE api_session SET expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 7 DAY) WHERE session_id = ?',
     [payload.jti]
   );
 
@@ -319,6 +349,9 @@ api.post('/auth/logout', run(async (req, res) => {
     await conn.query('UPDATE api_session SET is_revoked=1 WHERE session_id=?', [res.locals.sessionId]);
     return { data: null };
   });
+  // 阶段一：MySQL 里的会话已吊销，Redis 缓存也要立刻删掉，否则在 TTL 内仍能通过认证
+  const token = bearerToken(req.headers.authorization);
+  if (token) await dropCachedUser(token);
 }));
 api.get('/users/:id', run(async (req, res) => {
   const userId = id.parse(req.params.id);
