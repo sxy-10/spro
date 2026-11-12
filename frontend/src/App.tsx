@@ -26,7 +26,8 @@ import { ProfileScreen } from './components/ProfileScreen';
 import { AdminScreen } from './components/AdminScreen';
 import { ExportModal } from './components/ExportModal';
 import { ForbiddenScreen } from './components/ForbiddenScreen';
-import { usePermission } from './hooks/useAuth';
+import { deriveAllowedScreens, deriveVisibleTabs, hasConsoleAccess, isScreenAllowed } from './lib/menuTabs';
+import { refreshPermissions, watchPermissionChanges } from './lib/permissionSync';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -35,17 +36,12 @@ export default function App() {
 
   // 组员4：会话仓库是全局真相来源——被 401 踢下线时自动回到登录页
   const session = useSession();
-  const canQueryRoutes = usePermission('route:line:query');
-  const hasAdminAccess = Boolean(
-    canQueryRoutes ||
-    user?.role === 'ADMIN' ||
-    user?.role === 'SUPER_ADMIN' ||
-    user?.role === 'AGENCY_ADMIN' ||
-    (Array.isArray(user?.roles) && user.roles.some((r: any) => {
-      const code = typeof r === 'string' ? r : r.code;
-      return ['ADMIN', 'SUPER_ADMIN', 'AGENCY_ADMIN'].includes(code);
-    }))
-  );
+  // 组员5：可见 Tab 与「管理中台」入口全部由 /v1/users/me/permissions 下发，
+  // 不再读取 user.role —— 原 App.tsx:41-47 的 ADMIN/SUPER_ADMIN/AGENCY_ADMIN 硬编码已删除。
+  const visibleTabs = deriveVisibleTabs(session.permissions, Boolean(session.accessToken));
+  const hasAdminAccess = hasConsoleAccess(session.permissions);
+  // 可达屏 = 可见 Tab + 下钻页（计划→智能体/行程）+ 有条件的管理中台
+  const allowedScreens = deriveAllowedScreens(session.permissions, Boolean(session.accessToken));
 
   useEffect(() => {
     setUser(session.accessToken ? session.user : null);
@@ -61,6 +57,21 @@ export default function App() {
       alive = false;
     };
   }, []);
+
+  // 组员5：挂载时 + 窗口重新可见时重新拉一次 menus/buttons。
+  // 管理员在后台改完权限，用户刷新页面或切回前台即生效，无需重新登录。
+  useEffect(() => {
+    if (!session.accessToken) return;
+    void refreshPermissions();
+    return watchPermissionChanges();
+  }, [session.accessToken]);
+
+  // 权限收窄后，停留在已不可达的屏时自动退回首个可用 Tab（渲染层由 MobileShell 再兜一次）
+  useEffect(() => {
+    const loggedIn = Boolean(session.accessToken);
+    if (isScreenAllowed(session.permissions, loggedIn, currentTab)) return;
+    setCurrentTab(deriveVisibleTabs(session.permissions, loggedIn)[0]?.key ?? 'plan');
+  }, [session.permissions, session.accessToken, currentTab]);
   
   // 方案数据
   const [itinerary, setItinerary] = useState<DetailedItinerary>(defaultPrototypeItinerary);
@@ -317,11 +328,14 @@ export default function App() {
       {/* 手机界面主体 */}
       <MobileShell
         screenTitle={currentTab}
+        allowedScreens={allowedScreens}
+        onBlockedScreen={() => setCurrentTab(visibleTabs[0]?.key ?? 'plan')}
         footerComponent={
           currentTab !== 'admin' ? (
             <TabBar
               currentTab={currentTab}
               onTabChange={(tab) => setCurrentTab(tab)}
+              tabs={visibleTabs}
             />
           ) : undefined
         }

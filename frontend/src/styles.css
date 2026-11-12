@@ -1891,3 +1891,233 @@ input:checked + .toggle-slider:before {
   color: #ffffff;
   cursor: pointer;
 }
+
+/* ==========================================================================
+   组员5（阶段4）：菜单权限守卫 + 角色/权限管理页面骨架
+   只负责表现层，不含任何数据请求逻辑
+   ========================================================================== */
+.screen-guard-blocked {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 28px;
+  text-align: center;
+  background: var(--theme-bg-device);
+}
+
+.screen-guard-icon {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  border-radius: 50%;
+  background: var(--theme-light-green);
+}
+
+.screen-guard-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--theme-text-primary);
+}
+
+.screen-guard-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--theme-text-secondary);
+}
+
+.screen-guard-back-btn {
+  margin-top: 6px;
+  padding: 9px 22px;
+  border: none;
+  border-radius: 20px;
+  background: var(--theme-brand-green);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rolemanage-container {
+  min-height: 100%;
+  padding: 16px;
+  background: var(--theme-bg-device);
+  color: var(--theme-text-primary);
+}
+
+.rolemanage-header {
+  margin-bottom: 14px;
+}
+
+.rolemanage-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.rolemanage-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--theme-text-secondary);
+  line-height: 1.6;
+}
+
+.rolemanage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rolemanage-panel {
+  background: var(--theme-card-white);
+  border: 1px solid var(--theme-border-color);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: var(--theme-shadow-soft);
+}
+
+.rolemanage-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.rolemanage-empty {
+  padding: 18px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--theme-text-muted);
+  line-height: 1.7;
+}
+
+.role-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.role-list-item {
+  padding: 7px 14px;
+  border-radius: 18px;
+  border: 1px solid var(--theme-border-green);
+  background: #ffffff;
+  color: var(--theme-text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.role-list-item-selected {
+  background: var(--theme-brand-green);
+  border-color: var(--theme-brand-green);
+  color: #ffffff;
+}
+
+.role-list-item-code {
+  display: block;
+  font-size: 10px;
+  opacity: 0.72;
+}
+
+.rolemanage-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.rolemanage-hint {
+  font-size: 11px;
+  color: var(--theme-text-muted);
+  line-height: 1.5;
+}
+
+.rolemanage-save-btn {
+  padding: 9px 20px;
+  border: none;
+  border-radius: 20px;
+  background: var(--theme-brand-green);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rolemanage-save-btn:disabled {
+  background: #cfd9d2;
+  cursor: not-allowed;
+}
+
+.perm-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.perm-tree-node {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.perm-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--theme-soft-green);
+  font-size: 12px;
+}
+
+.perm-tree-row label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.perm-tree-name {
+  font-weight: 600;
+}
+
+.perm-tree-code {
+  color: var(--theme-text-muted);
+  font-size: 11px;
+}
+
+.perm-tree-badge {
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 10px;
+  background: #ffffff;
+  border: 1px solid var(--theme-border-green);
+  color: var(--theme-accent-green);
+}
+
+.perm-tree-children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 18px;
+  padding-left: 10px;
+  border-left: 1px dashed var(--theme-border-green);
+}
+
+.perm-tree-expand-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--theme-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
