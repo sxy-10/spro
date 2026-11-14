@@ -59,10 +59,12 @@ export function page(query: unknown, sorts: string[], filters: Record<string, z.
     sort: z.string().refine(v => sorts.includes(v.replace(/^-/, ''))).default('-created_at'), ...filters }).strict();
   return schema.parse(query) as {page: number; size: number; sort: string; [key: string]: any};
 }
-export async function list(conn: typeof pool | PoolConnection, select: string, count: string, params: any[], p: ReturnType<typeof page>) {
+export async function list(conn: typeof pool | PoolConnection, select: string, count: string, params: any[], p: ReturnType<typeof page>,
+  opts: { tieBreaker?: string } = {}) {
   // select and count are server-owned SQL, and sort is checked against each endpoint's whitelist.
   const field = p.sort.replace(/^-/, '');
-  const [rows] = await conn.query<RowDataPacket[]>(`${select} ORDER BY ${field} ${p.sort.startsWith('-') ? 'DESC' : 'ASC'}, id DESC LIMIT ? OFFSET ?`, [...params, p.size, (p.page - 1) * p.size]);
+  // 多表 JOIN 时 id / created_at 可能同名二义，由调用方通过 tieBreaker 指定限定名
+  const [rows] = await conn.query<RowDataPacket[]>(`${select} ORDER BY ${field} ${p.sort.startsWith('-') ? 'DESC' : 'ASC'}, ${opts.tieBreaker ?? 'id'} DESC LIMIT ? OFFSET ?`, [...params, p.size, (p.page - 1) * p.size]);
   const [totals] = await conn.query<RowDataPacket[]>(count, params);
   const total = Number(totals[0].total);
   return { list: rows, total, has_more: p.page * p.size < total };
@@ -105,12 +107,13 @@ export async function write(req: Request, res: Response, action: (conn: PoolConn
 }
 export function errors(error: any, _req: Request, res: Response, _next: NextFunction) {
   if (res.headersSent) return;
+  if (error instanceof z.ZodError) console.error('[zod]', JSON.stringify(error.issues).slice(0, 400), (error as any).stack?.split('\n').slice(1, 12).join('\n'));
   const known = error instanceof ApiError;
   const invalid = error instanceof z.ZodError || error.type === 'entity.parse.failed' || error.type === 'entity.too.large';
   const duplicate = error.code === 'ER_DUP_ENTRY';
   const status = known ? error.status : invalid ? 400 : duplicate ? 409 : 500;
   if (status === 429) res.setHeader('Retry-After', '60');
-  if (status >= 500) console.error(JSON.stringify({ trace_id: res.locals.traceId, code: 'INTERNAL_ERROR' }));
+  if (status >= 500) console.error(JSON.stringify({ trace_id: res.locals.traceId, code: 'INTERNAL_ERROR', message: error?.message, stack: error?.stack?.split('\n').slice(1, 4).join(' | ') }));
   res.status(status).json({ code: known ? error.code : invalid ? 10001 : duplicate ? 20015 : 50000,
     message: known ? error.message : invalid ? '参数为空、格式错误或超出允许范围' : duplicate ? '资源已存在' : '服务器内部错误，请稍后重试', data: null, trace_id: res.locals.traceId ?? randomUUID() });
 }

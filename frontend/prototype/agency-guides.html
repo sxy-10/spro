@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>导游与团队管理 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>导游与团队管理</h1>
+    <p>出团资源登记与编组安排。导游证号唯一；停用导游不可再被指派新团队，历史团队保留记录。团队成员来自已支付/已确认订单自动收编。</p>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <div class="tab active" data-tab="guide">导游管理</div>
+      <div class="tab" data-tab="team">团队编组</div>
+    </div>
+
+    <!-- 导游管理 -->
+    <div class="tab-pane" id="pane-guide">
+      <div class="filters">
+        <div class="field"><label>姓名 / 证号</label><input type="text" id="g-kw" placeholder="姓名或导游证号"></div>
+        <div class="field"><label>状态</label><select id="g-status">
+          <option value="">全部</option><option value="ACTIVE">在职</option><option value="DISABLED">停用</option>
+        </select></div>
+        <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="g-search">查询</button></div>
+      </div>
+      <div class="toolbar">
+        <button class="btn btn-primary" type="button" id="g-new" data-perm="guide:add">+ 新增导游</button>
+        <span class="muted" id="g-total">—</span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:10%"><col style="width:7%"><col style="width:13%"><col style="width:15%"><col style="width:12%"><col style="width:8%"><col style="width:8%"><col style="width:10%"><col style="width:17%"></colgroup>
+          <thead><tr><th>姓名</th><th>性别</th><th>联系电话</th><th>导游证号</th><th>擅长类型</th><th>评分</th><th>带团数</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="guides-tbody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="g-pager"></div>
+    </div>
+
+    <!-- 团队编组 -->
+    <div class="tab-pane" id="pane-team" hidden>
+      <div class="toolbar">
+        <button class="btn btn-primary" type="button" id="t-new" data-perm="team:add">+ 创建团队</button>
+        <span class="muted" id="t-total">—</span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:14%"><col style="width:22%"><col style="width:10%"><col style="width:12%"><col style="width:8%"><col style="width:10%"><col style="width:24%"></colgroup>
+          <thead><tr><th>团队编号</th><th>关联线路 / 出行日期</th><th>人数</th><th>指派导游</th><th>上限</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="teams-tbody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="t-pager"></div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "agency", active: "guides", title: "导游与团队管理", crumb: "业务管理" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+
+  document.querySelectorAll(".tab").forEach(function (t) {
+    t.addEventListener("click", function () {
+      document.querySelectorAll(".tab").forEach(function (x) { x.classList.remove("active"); });
+      t.classList.add("active");
+      var key = t.getAttribute("data-tab");
+      document.getElementById("pane-guide").hidden = key !== "guide";
+      document.getElementById("pane-team").hidden = key !== "team";
+    });
+  });
+  document.querySelectorAll("[data-perm]").forEach(function (btn) {
+    if (!api.perm(btn.getAttribute("data-perm"))) btn.style.display = "none";
+  });
+
+  /* ================= 导游 ================= */
+  var gState = { page: 1, size: 10, keyword: "", status: "" };
+
+  function loadGuides() {
+    U.loadInto("#guides-tbody", function () {
+      return api.call("/admin/guides" + U.query({ page: gState.page, size: gState.size, keyword: gState.keyword, status: gState.status }), "GET");
+    }, function (data) {
+      document.getElementById("g-total").textContent = "共 " + data.total + " 名导游";
+      U.fillTbody("#guides-tbody", data.list, function (g) {
+        var actions = '<button class="btn-link" data-act="g-edit" data-id="' + g.guide_id + '">编辑</button>';
+        if (g.status === "ACTIVE") {
+          actions += '<button class="btn-link danger" data-act="g-off" data-id="' + g.guide_id + '">停用</button>';
+        } else {
+          actions += '<button class="btn-link" data-act="g-on" data-id="' + g.guide_id + '">启用</button>';
+        }
+        return "<tr><td>" + U.esc(g.name) + "</td><td>" + U.esc(g.gender) + "</td>" +
+          "<td>" + U.esc(g.masked_phone || "—") + "</td><td>" + U.esc(g.license_no) + "</td>" +
+          "<td>" + U.esc(g.specialty || "—") + "</td><td>" + Number(g.rating).toFixed(1) + "</td>" +
+          "<td>" + g.team_count + "</td><td>" + U.tag("GUIDE", g.status) + "</td>" +
+          '<td><div class="cell-actions">' + actions + "</div></td></tr>";
+      });
+      U.pagination("#g-pager", { page: gState.page, size: gState.size, total: data.total, onPage: function (p) { gState.page = p; loadGuides(); } });
+      document.querySelectorAll("#guides-tbody [data-act]").forEach(function (btn) {
+        var row = data.list.find(function (r) { return String(r.guide_id) === String(btn.getAttribute("data-id")); });
+        if (!row) return;
+        var act = btn.getAttribute("data-act");
+        btn.addEventListener("click", function () {
+          if (act === "g-edit") guideForm(row);
+          else if (act === "g-off") U.confirmDialog("确定停用导游「" + row.name + "」？停用后不可被指派到新团队。", function (close) {
+            api.call("/admin/guides/" + row.guide_id, "PATCH", { status: "DISABLED" }).then(function () {
+              close(); window.toast("已停用"); loadGuides();
+            }).catch(function (err) { close(); U.toastError(err); });
+          });
+          else if (act === "g-on") api.call("/admin/guides/" + row.guide_id, "PATCH", { status: "ACTIVE" })
+            .then(function () { window.toast("已启用"); loadGuides(); }).catch(U.toastError);
+        });
+      });
+    });
+  }
+
+  function guideForm(row) {
+    var isEdit = !!row;
+    U.formModal({
+      title: isEdit ? "编辑导游 · " + row.name : "新增导游",
+      note: isEdit ? "手机号出于隐私以脱敏展示；如需更换号码请重新填写，留空则保持不变。" : "",
+      fields: [
+        { key: "name", label: "姓名", required: true, value: row && row.name },
+        { key: "gender", label: "性别", type: "select", options: ["男", "女"], value: row && row.gender },
+        { key: "phone", label: "联系电话", required: !isEdit, value: "",
+          placeholder: isEdit ? "留空则不修改（" + (row.masked_phone || "未登记") + "）" : "11 位手机号" },
+        { key: "license_no", label: "导游证号（唯一）", required: true, value: row && row.license_no },
+        { key: "specialty", label: "擅长线路类型", value: row && row.specialty, placeholder: "如：自然风光 / 户外徒步" },
+        { key: "bio", label: "个人简介", type: "textarea", span: 2, value: row && row.bio }
+      ],
+      submitLabel: isEdit ? "保存" : "创建",
+      onSubmit: function (values) {
+        var payload = {
+          name: values.name, gender: values.gender, license_no: values.license_no,
+          specialty: values.specialty || "", bio: values.bio || ""
+        };
+        if (values.phone) payload.phone = values.phone;
+        var p = isEdit
+          ? api.call("/admin/guides/" + row.guide_id, "PUT", payload)
+          : api.call("/admin/guides", "POST", payload);
+        return p.then(function () {
+          window.toast(isEdit ? "导游资料已保存" : "导游已登记");
+          loadGuides();
+        });
+      }
+    });
+  }
+
+  document.getElementById("g-search").addEventListener("click", function () {
+    gState.page = 1;
+    gState.keyword = document.getElementById("g-kw").value.trim();
+    gState.status = document.getElementById("g-status").value;
+    loadGuides();
+  });
+  document.getElementById("g-new").addEventListener("click", function () { guideForm(null); });
+
+  /* ================= 团队 ================= */
+  var tState = { page: 1, size: 10 };
+  var routeOptions = [];
+
+  function loadRoutesOnce() {
+    if (routeOptions.length) return Promise.resolve();
+    return api.call("/admin/routes?page=1&size=100", "GET").then(function (data) {
+      routeOptions = (data.list || []).map(function (r) { return { id: r.route_id, title: r.title }; });
+    }).catch(function () { routeOptions = []; });
+  }
+
+  function loadTeams() {
+    U.loadInto("#teams-tbody", function () {
+      return api.call("/admin/teams" + U.query({ page: tState.page, size: tState.size }), "GET");
+    }, function (data) {
+      document.getElementById("t-total").textContent = "共 " + data.total + " 个团队";
+      U.fillTbody("#teams-tbody", data.list, function (t) {
+        var actions = '<button class="btn-link" data-act="t-members" data-no="' + t.team_no + '">名单</button>';
+        if (t.status !== "FINISHED") {
+          actions += '<button class="btn-link" data-act="t-assign" data-no="' + t.team_no + '">指派导游</button>' +
+            '<button class="btn-link" data-act="t-status" data-no="' + t.team_no + '">状态流转</button>';
+        }
+        return "<tr><td><b>" + U.esc(t.team_no) + "</b></td>" +
+          "<td>" + U.esc(t.route_title || "—") + " · " + (t.travel_date ? U.date(t.travel_date) : "—") + " 出发</td>" +
+          "<td>" + t.member_count + " 人</td><td>" + U.esc(t.guide_name || "待分配") + "</td>" +
+          "<td>" + t.max_members + "</td><td>" + U.tag("TEAM", t.status) + "</td>" +
+          '<td><div class="cell-actions">' + actions + "</div></td></tr>";
+      });
+      U.pagination("#t-pager", { page: tState.page, size: tState.size, total: data.total, onPage: function (p) { tState.page = p; loadTeams(); } });
+      document.querySelectorAll("#teams-tbody [data-act]").forEach(function (btn) {
+        var row = data.list.find(function (r) { return r.team_no === btn.getAttribute("data-no"); });
+        if (!row) return;
+        var act = btn.getAttribute("data-act");
+        btn.addEventListener("click", function () {
+          if (act === "t-members") showMembers(row);
+          else if (act === "t-assign") assignGuide(row);
+          else if (act === "t-status") advanceStatus(row);
+        });
+      });
+    });
+  }
+
+  function showMembers(team) {
+    api.call("/admin/teams/" + encodeURIComponent(team.team_no) + "/members", "GET").then(function (data) {
+      var rows = (data.list || []).map(function (m) {
+        return "<tr><td>" + U.esc(m.order_no || "手工录入") + "</td><td>" + U.esc(m.member_name || "—") + "</td>" +
+          "<td>" + U.esc(m.member_phone || "—") + "</td><td>" + m.people_count + "</td></tr>";
+      }).join("");
+      U.drawer("团队成员 · " + U.esc(team.team_no),
+        '<p class="muted" style="margin-top:0">成员名单与订单游客对应，手机号脱敏展示。</p>' +
+        '<table class="grid-table"><thead><tr><th>来源订单</th><th>游客称呼</th><th>联系电话</th><th>人数</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="4" class="muted" style="text-align:center">暂无成员，可等订单支付后自动收编</td></tr>') + "</tbody></table>");
+    }).catch(U.toastError);
+  }
+
+  function assignGuide(team) {
+    api.call("/admin/guides?status=ACTIVE&page=1&size=100", "GET").then(function (data) {
+      var guides = (data.list || []);
+      if (!guides.length) { window.toast("暂无在职导游，请先在「导游管理」新增"); return; }
+      U.formModal({
+        title: "指派导游 · " + team.team_no,
+        note: "仅可指派在职（ACTIVE）导游；已停用导游不会出现在列表中。",
+        fields: [{ key: "guide_id", label: "选择在职导游", type: "select", required: true,
+          value: team.guide_id ? String(team.guide_id) : undefined,
+          options: guides.map(function (g) { return { value: g.guide_id, label: g.name + "（" + (g.specialty || "综合") + "）" }; }) }],
+        submitLabel: "指派",
+        onSubmit: function (values) {
+          var picked = guides.filter(function (g) { return String(g.guide_id) === String(values.guide_id); })[0];
+          return api.call("/admin/teams/" + encodeURIComponent(team.team_no), "PUT", { guide_id: values.guide_id })
+            .then(function () {
+              window.toast("已指派 " + (picked ? picked.name : "导游") + " 至 " + team.team_no);
+              loadTeams();
+            });
+        }
+      });
+    }).catch(U.toastError);
+  }
+
+  function advanceStatus(team) {
+    var flow = { RECRUITING: ["FULL", "DEPARTED"], FULL: ["DEPARTED"], DEPARTED: ["FINISHED"] };
+    var next = flow[team.status] || [];
+    if (!next.length) { window.toast("当前状态不可流转"); return; }
+    U.formModal({
+      title: "状态流转 · " + team.team_no,
+      note: "流转方向：待成团 → 已成团 → 出行中 → 已结束（不可回退）。",
+      fields: [{ key: "status", label: "目标状态", type: "select", required: true,
+        options: next.map(function (s) { return { value: s, label: (U.DICTS.TEAM[s] || {}).label || s }; }) }],
+      submitLabel: "确认流转",
+      onSubmit: function (values) {
+        return api.call("/admin/teams/" + encodeURIComponent(team.team_no), "PUT", { status: values.status })
+          .then(function () { window.toast("状态已更新"); loadTeams(); });
+      }
+    });
+  }
+
+  document.getElementById("t-new").addEventListener("click", function () {
+    loadRoutesOnce().then(function () {
+      U.formModal({
+        title: "创建团队",
+        note: "创建后自动收编该线路该日期已支付/已确认订单的游客为成员。",
+        fields: [
+          { key: "route_id", label: "关联线路", type: "select", required: true,
+            options: routeOptions.map(function (r) { return { value: r.id, label: r.title }; }) },
+          { key: "travel_date", label: "出行日期", type: "date", required: true, value: U.plusDays(7) },
+          { key: "max_members", label: "成团人数上限", type: "number", required: true, value: 20 },
+          { key: "remark", label: "备注", type: "textarea", span: 2 }
+        ],
+        submitLabel: "创建团队",
+        onSubmit: function (values) {
+          return api.call("/admin/teams", "POST", {
+            route_id: values.route_id, travel_date: values.travel_date,
+            max_members: Number(values.max_members), remark: values.remark || undefined
+          }).then(function () { window.toast("团队已创建"); loadTeams(); });
+        }
+      });
+    });
+  });
+
+  loadGuides();
+  loadTeams();
+})();
+</script>
+</body>
+</html>

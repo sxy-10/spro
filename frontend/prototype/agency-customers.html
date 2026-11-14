@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>客户管理 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>客户管理</h1>
+    <p>与本社产生过下单行为的游客档案；手机号脱敏展示，本页不提供账号密码修改与禁用操作（属平台权限）。跟进备注仅本社可见。</p>
+  </div>
+
+  <div class="card">
+    <div class="filters">
+      <div class="field"><label>昵称 / 手机</label><input type="text" id="c-kw" placeholder="昵称或手机号"></div>
+      <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="c-search">查询</button></div>
+    </div>
+    <div class="toolbar"><span class="muted" id="c-total">—</span></div>
+    <div class="table-wrap">
+      <table class="grid-table">
+        <colgroup><col style="width:16%"><col style="width:15%"><col style="width:13%"><col style="width:10%"><col style="width:13%"><col style="width:14%"><col style="width:19%"></colgroup>
+        <thead><tr><th>客户昵称</th><th>脱敏手机号</th><th>常用出发城市</th><th>累计订单</th><th>累计消费</th><th>最近下单</th><th>偏好 / 操作</th></tr></thead>
+        <tbody id="customers-tbody"></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="c-pager"></div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "agency", active: "customers", title: "客户管理", crumb: "业务管理" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var state = { page: 1, size: 10, keyword: "" };
+
+  function load() {
+    U.loadInto("#customers-tbody", function () {
+      return api.call("/admin/customers" + U.query({ page: state.page, size: state.size, keyword: state.keyword }), "GET");
+    }, function (data) {
+      document.getElementById("c-total").textContent = "共 " + data.total + " 位客户";
+      U.fillTbody("#customers-tbody", data.list, function (c) {
+        var tags = (c.preference_tags || []).slice(0, 1).map(function (t) {
+          return '<span class="tag tag-info">' + U.esc(t) + "</span>";
+        }).join("");
+        return "<tr><td>" + U.esc(c.nickname || "游客") + "</td><td>" + U.esc(c.masked_phone || "—") + "</td>" +
+          "<td>" + U.esc(c.departure_city || "—") + "</td><td>" + c.total_orders + "</td>" +
+          "<td>" + U.moneyShort(c.total_spend) + "</td><td>" + (c.last_order_at ? U.date(c.last_order_at) : "—") + "</td>" +
+          '<td>' + (tags || '<span class="muted">—</span>') +
+          '<button class="btn-link" data-id="' + c.user_id + '" style="margin-left:10px">详情</button></td></tr>';
+      });
+      U.pagination("#c-pager", { page: state.page, size: state.size, total: data.total, onPage: function (p) { state.page = p; load(); } });
+      document.querySelectorAll("#customers-tbody [data-id]").forEach(function (btn) {
+        btn.addEventListener("click", function () { showDetail(btn.getAttribute("data-id")); });
+      });
+    });
+  }
+
+  function showDetail(userId) {
+    api.call("/admin/customers/" + userId, "GET").then(function (c) {
+      var orders = (c.orders || []).map(function (o) {
+        return "<tr><td>" + U.esc(o.order_no) + "</td><td>" + U.esc(o.route_title) + "</td>" +
+          "<td>" + o.people_count + "</td><td>" + U.money(o.amount) + "</td>" +
+          "<td>" + U.tag("ORDER", o.status) + "</td></tr>";
+      }).join("");
+      var tags = (c.preference_tags || []).map(function (t) { return '<span class="tag tag-info">' + U.esc(t) + "</span>"; }).join(" ");
+      var dests = (c.preference_destinations || []).map(function (t) { return U.esc(t); }).join("、") || "—";
+      var canNote = api.perm("customer:customer:update");
+      var noteHtml = '<h3 style="margin:22px 0 10px;font-size:14px">跟进备注（仅本社可见）</h3>' +
+        '<textarea id="cust-note" rows="2" style="width:100%"' + (canNote ? "" : " disabled") + '>' + U.esc(c.follow_up_note || "") + "</textarea>" +
+        (canNote ? '<div style="margin-top:8px;text-align:right"><button class="btn btn-primary btn-sm" id="save-note">保存备注</button></div>' : "");
+      var handle = U.drawer("客户详情",
+        '<div class="desc-list">' +
+        '<div class="desc-item"><div class="k">昵称</div><div class="v">' + U.esc(c.nickname || "—") + "</div></div>" +
+        '<div class="desc-item"><div class="k">脱敏手机号</div><div class="v">' + U.esc(c.phone || "—") + "</div></div>" +
+        '<div class="desc-item"><div class="k">常用出发城市</div><div class="v">' + U.esc(c.departure_city || "—") + "</div></div>" +
+        '<div class="desc-item"><div class="k">注册时间</div><div class="v">' + U.date(c.register_time) + "</div></div>" +
+        "</div>" +
+        '<h3 style="margin:22px 0 10px;font-size:14px">历史订单</h3>' +
+        '<table class="grid-table"><thead><tr><th>订单号</th><th>产品</th><th>人数</th><th>金额</th><th>状态</th></tr></thead><tbody>' +
+        (orders || '<tr><td colspan="5" class="muted" style="text-align:center">暂无订单</td></tr>') + "</tbody></table>" +
+        '<h3 style="margin:22px 0 10px;font-size:14px">偏好概览</h3>' +
+        '<div class="tag-row">' + (tags || '<span class="muted">暂无标签</span>') + "</div>" +
+        '<div class="muted" style="margin-top:8px">偏好目的地：' + dests + "</div>" +
+        noteHtml);
+      var saveBtn = handle.body.querySelector("#save-note");
+      if (saveBtn) {
+        saveBtn.addEventListener("click", function () {
+          api.call("/admin/customers/" + userId + "/note", "PUT", { note: handle.body.querySelector("#cust-note").value })
+            .then(function () { window.toast("备注已保存"); })
+            .catch(U.toastError);
+        });
+      }
+    }).catch(U.toastError);
+  }
+
+  document.getElementById("c-search").addEventListener("click", function () {
+    state.page = 1;
+    state.keyword = document.getElementById("c-kw").value.trim();
+    load();
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

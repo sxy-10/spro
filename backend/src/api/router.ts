@@ -13,6 +13,8 @@ import { ApiError, id, mobile, utc, money, reply, run, page, list, write, secret
 import { authenticateJwt } from '../auth/passport.js';
 import { requirePermission } from '../auth/rbac.js';
 import { rbac } from './rbacRouter.js';
+import { agencyExt } from './agencyExtRouter.js';
+import { platform } from './platformRouter.js';
 import { chatRouter } from './chatRouter.js';
 import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
@@ -344,6 +346,9 @@ api.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store'); rateLi
 api.use('/chat', chatRouter);
 // RBAC 管理接口（角色/权限/当前用户），见 api/rbacRouter.ts
 api.use(rbac);
+// Web 端（B 端旅行社 + 平台方）扩展接口，见 agencyExtRouter.ts / platformRouter.ts
+api.use(agencyExt);
+api.use(platform);
 api.post('/auth/logout', run(async (req, res) => {
   await write(req, res, async conn => {
     await conn.query('UPDATE api_session SET is_revoked=1 WHERE session_id=?', [res.locals.sessionId]);
@@ -490,9 +495,16 @@ api.post('/spots/:id/comments',run(async(req,res)=>{
 // 管理端统一由 RBAC 权限码守卫：不再硬编码角色判断，权限来源改为 sys_user_role → sys_role_permission
 // 数据级隔离（agency_id）仍由各 handler 自行按 res.locals.user.agency_id 收口
 api.get('/admin/routes', requirePermission('route:line:query'), run(async(req,res)=>{
-  const p=page(req.query,['created_at','base_price_rmb']);
-  const where='FROM travel_product WHERE agency_id=?';
-  reply(res,await list(pool,`SELECT ${routeFields} ${where}`,`SELECT COUNT(*) total ${where}`,[res.locals.user.agency_id],p));
+  const p=page(req.query,['created_at','base_price_rmb','conversion_rate'],{
+    keyword:z.string().max(100).optional(),
+    status:z.enum(['DRAFT','ON_SALE','OFF_SALE']).optional()
+  });
+  const conds=['agency_id=?']; const params:any[]=[res.locals.user.agency_id];
+  if(p.keyword){conds.push('(title LIKE ? OR product_no LIKE ?)');params.push(`%${p.keyword}%`,`%${p.keyword}%`);}
+  if(p.status){conds.push('status=?');params.push(p.status);}
+  const where='WHERE '+conds.join(' AND ');
+  const fields=`${routeFields},visitor_count,plans_generated_count,order_count,conversion_rate,audit_status,audit_remark`;
+  reply(res,await list(pool,`SELECT ${fields} FROM travel_product ${where}`,`SELECT COUNT(*) total FROM travel_product ${where}`,params,p));
 }));
 api.post('/admin/routes', requirePermission('route:line:add'), run(async(req,res)=>{
   const body=z.object({title:text(100),destination:text(100),default_days:z.number().int().min(1).max(30),style_tag:text(30),base_price_rmb:money}).strict().parse(req.body);

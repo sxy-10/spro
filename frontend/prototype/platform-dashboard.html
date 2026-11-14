@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>平台工作台 · 平台管理后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>平台工作台</h1>
+    <p>全平台经营大盘、待办治理事项与排行概览。数据来自 <code>/platform/overview</code> 实时接口。</p>
+  </div>
+
+  <div id="dashboard-body">
+    <!-- KPI 卡片 -->
+    <div class="kpi-grid" id="kpi-grid"></div>
+
+    <div class="split">
+      <!-- 经营趋势 -->
+      <div class="card">
+        <div class="card-head"><div class="card-title">近 14 天订单与交易额</div></div>
+        <div class="card-body" id="trend-body"></div>
+      </div>
+
+      <!-- 待办队列 -->
+      <div class="card">
+        <div class="card-head"><div class="card-title">待办队列</div></div>
+        <div class="card-body"><ul class="todo-list" id="todo-list"></ul></div>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-head"><div class="card-title">热门目的地</div></div>
+        <div class="card-body" id="dest-heat"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">高转化产品</div>
+          <div class="card-actions"><a class="btn-link" href="platform-analytics.html">分析中心</a></div>
+        </div>
+        <div class="card-body" id="top-products"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">快捷入口</div></div>
+        <div class="card-body">
+          <div class="grid-2" style="gap:10px">
+            <a class="btn btn-outline" href="platform-audit.html">产品审核</a>
+            <a class="btn btn-outline" href="platform-users.html">用户管理</a>
+            <a class="btn btn-outline" href="platform-orders.html">订单监督</a>
+            <a class="btn btn-outline" href="platform-finance.html">财务结算</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "platform", active: "dashboard", title: "平台工作台", crumb: "运营概览" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+
+  function render(data) {
+    var k = data.kpi;
+    document.getElementById("kpi-grid").innerHTML = [
+      { label: "注册用户总数", num: k.tourist_count, sub: "全部 C 端游客账号", cls: "up" },
+      { label: "入驻旅行社", num: k.agency_count, sub: "正常运营机构", cls: "" },
+      { label: "在售产品数", num: k.route_onsale + k.souvenir_onsale, sub: "线路 " + k.route_onsale + " · 特产 " + k.souvenir_onsale, cls: "" },
+      { label: "今日订单数", num: k.today_orders, sub: "交易额 " + U.moneyShort(k.today_amount), cls: "up" },
+      { label: "待审核条数", num: k.pending_audits, sub: "线路与特产待审核", cls: k.pending_audits > 0 ? "down" : "" },
+      { label: "退款金额", num: U.moneyShort(k.refund_amount), sub: "累计已退款订单", cls: k.refund_amount > 0 ? "down" : "" }
+    ].map(function (item) {
+      return '<div class="kpi-card"><div class="kpi-label">' + U.esc(item.label) + '</div>' +
+        '<div class="kpi-num">' + U.esc(item.num) + '</div>' +
+        '<div class="kpi-sub ' + item.cls + '">' + U.esc(item.sub) + "</div></div>";
+    }).join("");
+
+    U.lineChart(document.getElementById("trend-body"), [
+      { label: "订单量", color: "#378044", data: data.trend.map(function (r) { return Number(r.orders); }) },
+      { label: "交易额（千元）", color: "#d98a1f", data: data.trend.map(function (r) { return Math.round(Number(r.amount) / 1000); }) },
+      { label: "访客数", color: "#7fb98a", data: data.trend.map(function (r) { return Number(r.visits); }) }
+    ], data.trend.map(function (r) { return String(r.day).slice(5); }));
+
+    // 待办队列
+    var todos = [];
+    if (k.pending_audits > 0) {
+      todos.push('<li><span class="tag tag-warn">待审核</span><div>' + k.pending_audits + " 条产品待平台审核" +
+        '<div class="muted">线路与特产审核队列</div></div><a class="btn-link" href="platform-audit.html">去审核</a></li>');
+    }
+    if (k.pending_confirms > 0) {
+      todos.push('<li><span class="tag tag-info">待确认</span><div>' + k.pending_confirms + " 笔已支付订单待旅行社确认" +
+        '<div class="muted">可前往订单监督跟进</div></div><a class="btn-link" href="platform-orders.html?status=PAID">查看</a></li>');
+    }
+    if (k.pending_settlements > 0) {
+      todos.push('<li><span class="tag tag-muted">待结算</span><div>' + k.pending_settlements + " 张结算单待平台确认" +
+        '<div class="muted">涉及旅行社应付款项</div></div><a class="btn-link" href="platform-finance.html">去结算</a></li>');
+    }
+    if (Number(k.refund_amount) > 0) {
+      todos.push('<li><span class="tag tag-danger">退款</span><div>累计退款 ' + U.money(k.refund_amount) +
+        '<div class="muted">退款记录可在财务页核查</div></div><a class="btn-link" href="platform-finance.html">查看</a></li>');
+    }
+    document.getElementById("todo-list").innerHTML =
+      todos.length ? todos.join("") : '<li><span class="tag tag-success">清空</span><div>暂无待办事项</div></li>';
+
+    // 热门目的地
+    var maxVisits = Math.max.apply(null, data.destination_heat.map(function (d) { return Number(d.visits); })) || 1;
+    document.getElementById("dest-heat").innerHTML = data.destination_heat.map(function (d) {
+      var pct = Math.round(Number(d.visits) / maxVisits * 100);
+      return '<div class="bar-row"><span>' + U.esc(d.destination) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+        '<span class="val">' + Number(d.visits) + "</span></div>";
+    }).join("") || '<div class="muted">暂无访问数据</div>';
+
+    // 高转化产品
+    document.getElementById("top-products").innerHTML = data.top_products.map(function (p) {
+      var thumb = (p.title || "旅").slice(0, 2);
+      return '<div class="product-mini"><div class="product-thumb">' + U.esc(thumb) + "</div>" +
+        '<div class="info"><div class="t">' + U.esc(p.title) + "</div>" +
+        '<div class="d">' + U.esc(p.agency_name) + " · " + (p.order_count || 0) + " 单</div></div>" +
+        '<div class="right"><div class="muted">转化率</div><b>' + (Number(p.conversion_rate) * 100).toFixed(1) + "%</b></div></div>";
+    }).join("") || '<div class="muted">暂无在售产品</div>';
+  }
+
+  U.loadInto("#dashboard-body", function () { return api.call("/platform/overview", "GET"); }, render);
+})();
+</script>
+</body>
+</html>

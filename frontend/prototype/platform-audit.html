@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>产品审核管理 · 平台管理后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>产品审核管理</h1>
+    <p>平台对全平台线路与特产上架前的审核治理；审核通过后自动上架，驳回理由将回传提交方。数据来自 <code>/platform/audits</code>。</p>
+  </div>
+
+  <div class="card" id="audit-card">
+    <div class="tabs">
+      <div class="tab active" data-tab="route">线路审核</div>
+      <div class="tab" data-tab="souvenir">特产审核</div>
+    </div>
+
+    <div class="tab-pane" id="pane-route">
+      <div class="filters">
+        <div class="field"><label>关键词</label><input type="text" id="r-keyword" placeholder="标题 / 编号"></div>
+        <div class="field"><label>审核状态</label>
+          <select id="r-status"><option value="PENDING">待审核</option><option value="APPROVED">已通过</option><option value="REJECTED">已驳回</option><option value="NONE">未提交</option></select>
+        </div>
+        <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="r-search">查询</button></div>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:12%"><col style="width:22%"><col style="width:14%"><col style="width:18%"><col style="width:10%"><col style="width:12%"><col style="width:12%"></colgroup>
+          <thead><tr><th>编号</th><th>线路标题</th><th>目的地</th><th>提交旅行社</th><th>价格</th><th>提交时间</th><th>状态 / 操作</th></tr></thead>
+          <tbody id="r-tbody"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="r-pager"></div>
+    </div>
+
+    <div class="tab-pane" id="pane-souvenir" hidden>
+      <div class="filters">
+        <div class="field"><label>关键词</label><input type="text" id="s-keyword" placeholder="名称 / 编号"></div>
+        <div class="field"><label>审核状态</label>
+          <select id="s-status"><option value="PENDING">待审核</option><option value="APPROVED">已通过</option><option value="REJECTED">已驳回</option><option value="NONE">未提交</option></select>
+        </div>
+        <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="s-search">查询</button></div>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:12%"><col style="width:22%"><col style="width:14%"><col style="width:18%"><col style="width:10%"><col style="width:12%"><col style="width:12%"></colgroup>
+          <thead><tr><th>编号</th><th>特产名称</th><th>分类</th><th>提交旅行社</th><th>价格</th><th>提交时间</th><th>状态 / 操作</th></tr></thead>
+          <tbody id="s-tbody"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="s-pager"></div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "platform", active: "audit", title: "产品审核管理", crumb: "治理与交易" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var canAudit = api.perm("route:line:audit") || api.perm("route:souvenir:audit");
+  var state = {
+    route: { page: 1, size: 10, total: 0 },
+    souvenir: { page: 1, size: 10, total: 0 }
+  };
+
+  function val(sel) { var el = document.querySelector(sel); return el ? el.value.trim() : ""; }
+
+  function load(type) {
+    var isRoute = type === "route";
+    var params = {
+      page: state[type].page, size: state[type].size,
+      type: type, audit_status: val("#" + (isRoute ? "r" : "s") + "-status"),
+      keyword: val("#" + (isRoute ? "r" : "s") + "-keyword")
+    };
+    api.call("/platform/audits" + U.query(params), "GET").then(function (data) {
+      state[type].total = data.total;
+      var tbodySel = "#" + (isRoute ? "r" : "s") + "-tbody";
+      document.querySelector(tbodySel).dataset.loaded = "1";
+      U.fillTbody(tbodySel, data.list, function (r) {
+        var pending = r.audit_status === "PENDING";
+        var actLabel = pending ? (canAudit ? "审核" : "查看") : "查看";
+        return "<tr><td>" + U.esc(r.product_no) + "</td><td>" + U.esc(r.title) + "</td><td>" + U.esc(r.destination || "—") +
+          "</td><td>" + U.esc(r.agency_name) + "</td><td>" + U.money(r.price) + "</td><td>" + U.dateTime(r.submitted_at) + "</td>" +
+          '<td><div class="cell-actions">' + U.tag("AUDIT", r.audit_status) +
+          '<button class="btn-link" data-type="' + type + '" data-id="' + r.product_id + '" data-pending="' + pending + '">' + actLabel + "</button>" +
+          "</div>" +
+          (r.audit_status === "REJECTED" && r.audit_remark ? '<div class="muted" style="font-size:11px">理由：' + U.esc(r.audit_remark) + "</div>" : "") +
+          "</td></tr>";
+      });
+      U.pagination("#" + (isRoute ? "r" : "s") + "-pager", {
+        total: state[type].total, size: state[type].size, page: state[type].page,
+        onPage: function (p) { state[type].page = p; load(type); }
+      });
+    }).catch(function (err) {
+      document.querySelector("#" + (isRoute ? "r" : "s") + "-tbody").innerHTML =
+        '<tr><td colspan="7" style="text-align:center;color:var(--danger);padding:24px 0">' + U.esc(err.message || "加载失败") + "</td></tr>";
+    });
+  }
+
+  // 审核抽屉：从列表行取基础信息；待审核且具备权限时提供通过 / 驳回操作
+  function openAudit(type, id, pending) {
+    var row = findRow(type, id);
+    var isRoute = type === "route";
+    var html =
+      '<div class="desc-list">' +
+      '<div class="desc-item"><div class="k">产品编号</div><div class="v">' + U.esc(row.product_no) + "</div></div>" +
+      '<div class="desc-item"><div class="k">提交旅行社</div><div class="v">' + U.esc(row.agency_name) + "</div></div>" +
+      '<div class="desc-item"><div class="k">' + (isRoute ? "目的地" : "分类") + '</div><div class="v">' + U.esc(row.destination || "—") + "</div></div>" +
+      '<div class="desc-item"><div class="k">' + (isRoute ? "基准价" : "售价") + '</div><div class="v">' + U.money(row.price) + (isRoute ? "/人" : "") + "</div></div>" +
+      '<div class="desc-item"><div class="k">提交时间</div><div class="v">' + U.esc(row.submitted_at) + "</div></div>" +
+      "</div>" +
+      '<h3 style="margin:18px 0 8px;font-size:14px">详情预览</h3>' +
+      '<div style="background:var(--brand-soft);border-radius:8px;padding:12px">' + U.esc(row.title) +
+      "（" + U.esc(row.agency_name) + " 提交）</div>";
+
+    if (!pending || !canAudit) { U.drawer("审核详情", html); return; }
+
+    html +=
+      '<h3 style="margin:18px 0 8px;font-size:14px">审核结论</h3>' +
+      '<div style="display:flex;flex-direction:column;gap:10px">' +
+      '<label style="display:flex;gap:8px;align-items:center"><input type="radio" name="audit-result" value="APPROVED" checked> 通过，自动上架</label>' +
+      '<label style="display:flex;gap:8px;align-items:center"><input type="radio" name="audit-result" value="REJECTED"> 驳回，理由回传提交方</label>' +
+      '<div><label class="muted" style="font-size:12px">审核意见（驳回建议必填）</label>' +
+      '<textarea id="audit-remark" rows="3" style="width:100%" placeholder="请填写审核意见或驳回原因"></textarea></div>' +
+      "</div>" +
+      '<div class="toolbar" style="padding:16px 0 0">' +
+      '<button class="btn btn-primary" type="button" id="btn-audit-submit">提交审核结论</button>' +
+      "</div>";
+
+    var handle = U.drawer("产品审核 · " + U.esc(row.title), html);
+    handle.body.querySelector("#btn-audit-submit").addEventListener("click", function (e) {
+      var result = handle.body.querySelector('[name="audit-result"]:checked').value;
+      var remark = handle.body.querySelector("#audit-remark").value.trim();
+      if (result === "REJECTED" && !remark) { global.toast("驳回时请填写理由，便于提交方整改"); return; }
+      e.target.disabled = true;
+      api.call("/platform/audits/" + type + "/" + id, "POST", { result: result, remark: remark })
+        .then(function () {
+          handle.close();
+          global.toast(result === "APPROVED" ? "已通过审核，产品已上架" : "已驳回并回传理由");
+          load(type);
+        })
+        .catch(function (err) { e.target.disabled = false; U.toastError(err); });
+    });
+  }
+
+  function findRow(type, id) {
+    var tbody = document.querySelector("#" + (type === "route" ? "r" : "s") + "-tbody");
+    var btn = tbody.querySelector('[data-id="' + id + '"]');
+    var tds = btn.closest("tr").children;
+    return {
+      product_no: tds[0].textContent, title: tds[1].textContent,
+      destination: tds[2].textContent, agency_name: tds[3].textContent,
+      price: tds[4].textContent.replace(/[¥,]/g, ""),
+      submitted_at: tds[5].textContent
+    };
+  }
+
+  document.getElementById("audit-card").addEventListener("click", function (e) {
+    var tab = e.target.closest(".tab");
+    if (tab) {
+      document.querySelectorAll(".tab").forEach(function (x) { x.classList.remove("active"); });
+      tab.classList.add("active");
+      var type = tab.getAttribute("data-tab");
+      document.getElementById("pane-route").hidden = type !== "route";
+      document.getElementById("pane-souvenir").hidden = type !== "souvenir";
+      if (!document.getElementById(type === "route" ? "r-tbody" : "s-tbody").dataset.loaded) load(type);
+      return;
+    }
+    var btn = e.target.closest("[data-id]");
+    if (btn) openAudit(btn.getAttribute("data-type"), btn.getAttribute("data-id"), btn.getAttribute("data-pending") === "true");
+  });
+  [["r", "route"], ["s", "souvenir"]].forEach(function (pair) {
+    document.getElementById(pair[0] + "-search").addEventListener("click", function () { state[pair[1]].page = 1; load(pair[1]); });
+    document.getElementById(pair[0] + "-keyword").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { state[pair[1]].page = 1; load(pair[1]); }
+    });
+  });
+
+  load("route");
+})();
+</script>
+</body>
+</html>

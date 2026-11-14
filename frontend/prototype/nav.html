@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>导航栏片段（公共封装）</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<!--
+  ============================================================
+  导航栏公共片段 · nav.html
+  ------------------------------------------------------------
+  本文件是侧边栏 + 顶部栏的静态 HTML 封装，供两种方式复用：
+  1. 服务端模板（Thymeleaf / 其他）：直接 include 本片段，
+     菜单按后端下发的 menus 渲染，按钮按权限码显隐。
+  2. 静态原型（本地双击打开）：file:// 下无法 fetch 本地片段，
+     各页面统一由 assets/nav.js 的 AdminLayout.mount() 渲染同款结构，
+     本文件仅作为结构与文案对照，不被页面脚本加载。
+
+  菜单分组与顺序与 assets/nav.js 中 MENUS 保持一致；
+  两端差异：agency（旅行社后台）/ platform（平台管理后台）。
+  ============================================================
+-->
+
+<!-- ===== 侧边栏（B 端示例；平台端菜单见文末注释） ===== -->
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-logo">旅</div>
+    <div>
+      <div class="brand-name">旅行社后台</div>
+      <div class="brand-sub">旅游规划智能体</div>
+    </div>
+  </div>
+
+  <nav class="menu">
+    <div class="menu-group-label">经营概览</div>
+    <a class="menu-item active" href="agency-dashboard.html">
+      <span class="label">旅行社工作台</span>
+    </a>
+    <a class="menu-item" href="agency-ai-plan.html">
+      <span class="label">AI 智能规划</span>
+    </a>
+
+    <div class="menu-group-label">业务管理</div>
+    <a class="menu-item" href="agency-products.html">
+      <span class="label">旅游产品管理</span>
+    </a>
+    <a class="menu-item" href="agency-orders.html">
+      <span class="label">订单管理</span>
+    </a>
+    <a class="menu-item" href="agency-customers.html">
+      <span class="label">客户管理</span>
+    </a>
+    <a class="menu-item" href="agency-guides.html">
+      <span class="label">导游与团队管理</span>
+    </a>
+
+    <div class="menu-group-label">其他</div>
+    <a class="menu-item" href="agency-finance.html">
+      <span class="label">财务管理</span>
+    </a>
+    <a class="menu-item" href="agency-settings.html">
+      <span class="label">旅行社设置</span>
+    </a>
+  </nav>
+
+  <div class="sidebar-foot">原型演示 · 数据为示例</div>
+</aside>
+
+<!-- ===== 顶部栏 ===== -->
+<header class="topbar">
+  <div class="crumb">经营概览 / <b>旅行社工作台</b></div>
+  <div class="topbar-right">
+    <span class="topbar-icon" title="全局搜索"><!-- 搜索图标占位 --></span>
+    <span class="topbar-icon" title="通知"><span class="dot"></span><!-- 铃铛图标占位 --></span>
+    <div class="user-chip">
+      <div class="avatar">管</div>
+      <div class="user-meta">
+        <div class="name">管理员</div>
+        <div class="role">旅行社超级管理员</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!--
+  ===== 平台端侧边栏菜单（/platform） =====
+  经营概览：平台工作台 platform-dashboard.html ｜ 数据分析中心 platform-analytics.html
+  治理与交易：旅行社管理 platform-agencies.html ｜ 产品审核管理 platform-audit.html
+            ｜ 用户管理 platform-users.html ｜ 订单与交易管理 platform-orders.html
+            ｜ 财务与结算 platform-finance.html
+  平台配置：AI 智能服务管理 platform-ai-service.html ｜ 权限与系统管理 platform-system.html
+-->
+</body>
+</html>
