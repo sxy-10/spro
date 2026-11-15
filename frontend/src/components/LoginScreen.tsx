@@ -32,12 +32,13 @@ type AuthView = 'login' | 'register' | 'reset';
 
 interface LoginScreenProps {
   onLogin: (user: AuthUser) => void;
+  onBack?: () => void;
 }
 
 const ACCOUNT_PATTERN = /^(\d{11}|[A-Za-z][A-Za-z0-9_@.-]{3,63})$/;
 const MOBILE_PATTERN = /^1[3-9]\d{9}$/;
 
-export function LoginScreen({ onLogin }: LoginScreenProps) {
+export function LoginScreen({ onLogin, onBack }: LoginScreenProps) {
   const session = useSession();
 
   const [view, setView] = useState<AuthView>('login');
@@ -221,6 +222,15 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
   return (
     <div className="auth-page">
+      {onBack && (
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+          <button type="button" onClick={onBack} style={{ background: 'none', border: 'none', color: '#4a6b53', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: '4px 0' }}>
+            <span>←</span>
+            <span>返回</span>
+          </button>
+        </div>
+      )}
+
       <header className="auth-header">
         <div className="auth-logo" aria-hidden="true">旅</div>
         <h2 className="auth-title">{view === 'register' ? '注册账号' : '登录旅行规划'}</h2>

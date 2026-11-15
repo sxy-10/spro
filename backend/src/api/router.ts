@@ -16,6 +16,7 @@ import { rbac } from './rbacRouter.js';
 import { agencyExt } from './agencyExtRouter.js';
 import { platform } from './platformRouter.js';
 import { chatRouter } from './chatRouter.js';
+import { aiAgentRouter } from './aiAgentRouter.js';
 import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
 import { bearerToken, dropCachedUser } from '../auth/sessionCache.js';
@@ -340,6 +341,9 @@ api.post('/auth/refresh', run(async (req, res) => {
     expires_in: 1800
   });
 }));
+
+// 智能体与 DeepSeek 大模型核心对话（游客与登录用户均可使用）
+api.use('/ai', aiAgentRouter);
 
 api.use(authenticateJwt);
 api.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store'); rateLimit(`user:${res.locals.user.id}`, 90).then(() => next(), next); });

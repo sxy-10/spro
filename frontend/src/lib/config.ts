@@ -6,11 +6,22 @@
  * 老师强调「Mock 地址不是给人打开看的网址，而是前端代码里的 BaseURL」。
  * 这个文件就是全项目唯一改 BaseURL 的地方，换 Mock / 换真实地址只动 .env，不动任何业务代码。
  */
+import { Capacitor } from '@capacitor/core';
 
 const stripTrailingSlash = (value: string) => value.replace(/\/+$/, '');
 
-/** 后端根地址（不含 /v1）。空字符串表示同源，交给 Vite 代理 */
-export const API_ORIGIN = stripTrailingSlash(import.meta.env.VITE_API_BASE_URL ?? '');
+/** 动态计算后端根地址（不含 /v1）。 */
+const resolveApiOrigin = (): string => {
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return stripTrailingSlash(import.meta.env.VITE_API_BASE_URL);
+  }
+  if (Capacitor.isNativePlatform()) {
+    const customHost = localStorage.getItem('travel_api_base_url');
+    return stripTrailingSlash(customHost || 'http://10.0.2.2:3001');
+  }
+  return '';
+};
+export const API_ORIGIN = resolveApiOrigin();
 
 /** 所有接口统一挂在 /v1 下 */
 export const API_PREFIX = '/v1';

@@ -295,6 +295,61 @@ export async function request<T = any>(
 export const rawRequest = async (config: AxiosRequestConfig): Promise<AxiosResponse> =>
   httpClient.request(config);
 
+/* ------------------------------------------------------------------ */
+/* 秒杀相关接口封装（组员4 · 阶段五）                                    */
+/* ------------------------------------------------------------------ */
+export interface SeckillSubmitResult {
+  status: 'queued' | 'sold_out';
+  req_id?: string;
+}
+
+export interface SeckillPollResult {
+  status: 'pending' | 'success' | 'failed' | 'timeout';
+  order_id?: number | null;
+}
+
+/**
+ * 发起秒杀预扣请求：POST /v1/seckill/:routeId
+ */
+export async function sendSeckill(
+  routeId: number | string,
+  date: string,
+  people: number = 1
+): Promise<SeckillSubmitResult> {
+  return request<SeckillSubmitResult>(`/seckill/${routeId}`, 'POST', { date, people });
+}
+
+/**
+ * 轮询秒杀结果：GET /v1/seckill/result/:reqId
+ * 默认间隔 1s，最多轮询 10 次
+ */
+export async function pollSeckillResult(
+  reqId: string,
+  maxAttempts = 10,
+  intervalMs = 1000,
+  onProgress?: (attempt: number, max: number) => void
+): Promise<SeckillPollResult> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    onProgress?.(attempt, maxAttempts);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    try {
+      const res = await request<{ status: 'pending' | 'success' | 'failed'; order_id?: number }>(
+        `/seckill/result/${encodeURIComponent(reqId)}`,
+        'GET'
+      );
+      if (res && (res.status === 'success' || res.status === 'failed')) {
+        return res;
+      }
+    } catch (err) {
+      // 中间单次网络抖动不立即中断，继续尝试下一次轮询
+      if (attempt >= maxAttempts) {
+        throw err;
+      }
+    }
+  }
+  return { status: 'timeout' };
+}
+
 /** 当前是否有令牌（旧 api.ts 的 isLoggedIn 从这里转发） */
 export const hasAccessToken = (): boolean => Boolean(getSession().accessToken);
 

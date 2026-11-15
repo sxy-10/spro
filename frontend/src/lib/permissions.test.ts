@@ -117,11 +117,11 @@ export const runPermissionUnitTests = () => {
     ['canAccessPath 命中', canAccessPath(permissions, '/routes/lines')],
     ['canAccessPath 拒绝 /admin', !canAccessPath(permissions, '/admin')],
 
-    // 阶段4 验收：游客 2 个 Tab（未登录 + 已登录 TOURIST 都要成立）
-    ['游客 Tab 常量 = 2', PUBLIC_TAB_KEYS.length === 2 && ALL_TAB_KEYS.length === 5],
-    ['未登录游客 2 个 Tab', keys(null, false) === 'plan,profile' && deriveVisibleTabs(null, false).length === 2],
-    ['TOURIST 登录后仍 2 个 Tab', keys(touristPerms, true) === 'plan,profile'],
-    ['空权限登录后按游客视角', keys(emptyPerms, true) === 'plan,profile'],
+    // 前台游客端：5 个 Tab 全部可用（未登录 + 已登录 TOURIST 均展示 5 个）
+    ['游客 Tab 常量 = 5', PUBLIC_TAB_KEYS.length === 5 && ALL_TAB_KEYS.length === 5],
+    ['未登录游客 5 个 Tab', keys(null, false) === 'plan,itinerary,agent,explore,profile' && deriveVisibleTabs(null, false).length === 5],
+    ['TOURIST 登录后 5 个 Tab', keys(touristPerms, true) === 'plan,itinerary,agent,explore,profile'],
+    ['空权限登录后 5 个 Tab', keys(emptyPerms, true) === 'plan,itinerary,agent,explore,profile'],
     ['超管看到全部 5 个 Tab', keys(superPerms, true) === 'plan,itinerary,agent,explore,profile'],
     ['社管看到全部 5 个 Tab', keys(agencyPerms, true) === 'plan,itinerary,agent,explore,profile'],
     ['Tab 展示元数据完整', deriveVisibleTabs(superPerms, true).every((tab) => Boolean(tab.label && tab.icon))],

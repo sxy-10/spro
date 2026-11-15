@@ -19,6 +19,7 @@ export interface LlmMeta {
 }
 
 export interface ChatOptions {
+  apiKey?: string;
   temperature?: number;
   maxTokens?: number;
   json?: boolean;
@@ -29,21 +30,34 @@ export interface ChatOptions {
 
 /** 进程内缓存：模型不可用时会自动降级到 deepseek-chat 并记住结果 */
 let resolvedModel: string | null = null;
+let runtimeCustomKey: string | null = null;
 
-export function llmKey(): string {
-  return (process.env.DEEPSEEK_API_KEY || '').trim();
+export function setRuntimeKey(key: string): void {
+  runtimeCustomKey = key.trim();
+  if (runtimeCustomKey) {
+    process.env.DEEPSEEK_API_KEY = runtimeCustomKey;
+  }
+}
+
+export function llmKey(overrideKey?: string): string {
+  if (overrideKey && overrideKey.trim().length > 0) return overrideKey.trim();
+  if (runtimeCustomKey) return runtimeCustomKey;
+  const envKey = (process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY || '').trim();
+  if (envKey === 'your_api_key_here') return '';
+  return envKey;
 }
 
 export function llmBaseUrl(): string {
-  return (process.env.DEEPSEEK_BASE_URL || DEFAULT_BASE).replace(/\/+$/, '');
+  const url = process.env.DEEPSEEK_BASE_URL || (process.env.LLM_BASE_URL?.includes('deepseek') ? process.env.LLM_BASE_URL : '') || DEFAULT_BASE;
+  return url.replace(/\/+$/, '');
 }
 
 export function llmModel(): string {
-  return resolvedModel || process.env.DEEPSEEK_MODEL || DEFAULT_MODEL;
+  return resolvedModel || process.env.DEEPSEEK_MODEL || (process.env.LLM_MODEL?.startsWith('deepseek') ? process.env.LLM_MODEL : '') || 'deepseek-chat';
 }
 
-export function llmEnabled(): boolean {
-  return llmKey().length > 0 && process.env.AI_DISABLED !== '1';
+export function llmEnabled(overrideKey?: string): boolean {
+  return llmKey(overrideKey).length > 0 && process.env.AI_DISABLED !== '1';
 }
 
 export function llmInfo(): LlmMeta {
@@ -58,18 +72,18 @@ export function llmInfo(): LlmMeta {
 
 /** 日志脱敏：把可能出现的密钥片段替换掉 */
 function sanitize(text: string): string {
-  const key = llmKey();
+  const key = llmKey() || '';
   let out = String(text || '');
   if (key.length >= 8) out = out.split(key).join('sk-***');
   return out.replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-***').slice(0, 500);
 }
 
-interface ChatMessage {
+export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-interface ChatResult {
+export interface ChatResult {
   content: string;
   model: string;
   latencyMs: number;
@@ -107,7 +121,7 @@ async function callOnce(messages: ChatMessage[], model: string, opts: ChatOption
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${llmKey()}`,
+        Authorization: `Bearer ${llmKey(opts.apiKey)}`,
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -143,7 +157,7 @@ async function callOnce(messages: ChatMessage[], model: string, opts: ChatOption
  * 内置：429/5xx 重试一次；模型不存在时自动降级到 deepseek-chat。
  */
 export async function chat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<ChatResult | null> {
-  if (!llmEnabled()) return null;
+  if (!llmEnabled(opts.apiKey)) return null;
 
   const model = llmModel();
   try {

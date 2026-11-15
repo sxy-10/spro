@@ -44,8 +44,10 @@ export const TAB_CATALOG: readonly TabDescriptor[] = [
   { key: 'profile', label: '我的', icon: 'user' }
 ] as const;
 
-/** 游客可见：计划 + 我的（未登录时「我的」渲染登录页） */
-export const PUBLIC_TAB_KEYS: readonly FrontTabKey[] = ['plan', 'profile'];
+/** 游客端（前台移动端）可见全部 5 个 Tab（未登录时「我的」渲染登录页） */
+export const PUBLIC_TAB_KEYS: readonly FrontTabKey[] = [
+  'plan', 'itinerary', 'agent', 'explore', 'profile'
+];
 
 /** 管理视角可见的全部前台 Tab */
 export const ALL_TAB_KEYS: readonly FrontTabKey[] = [
