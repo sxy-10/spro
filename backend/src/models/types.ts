@@ -95,6 +95,14 @@ export interface TravelPlanItinerary {
       touristAssistanceHotline: string;
     };
   };
+  /** AI 生成溯源信息（模板回退时为 template） */
+  aiMeta?: {
+    provider: 'deepseek' | 'template';
+    model: string;
+    latency_ms?: number;
+    tokens?: number;
+    request_id?: string;
+  };
 }
 
 export interface AgentChatMessage {

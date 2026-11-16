@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>旅行社设置 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>旅行社设置</h1>
+    <p>本社资料、社内成员、业务字典与操作留痕；角色与权限由平台授予，本页不提供权限分配入口。</p>
+  </div>
+
+  <div class="grid-2">
+    <!-- 本社资料 -->
+    <div class="card">
+      <div class="card-head"><div class="card-title">本社资料</div></div>
+      <div class="card-body" id="profile-body">
+        <div class="muted">加载中…</div>
+      </div>
+    </div>
+
+    <!-- 通知偏好 -->
+    <div class="card">
+      <div class="card-head"><div class="card-title">通知偏好</div></div>
+      <div class="card-body" id="notify-body">
+        <div class="muted">加载中…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 社内成员 -->
+  <div class="card">
+    <div class="card-head">
+      <div class="card-title">社内成员</div>
+      <div class="card-actions"><button class="btn btn-primary btn-sm" type="button" id="m-new" data-perm="agency:member:add">+ 新增成员</button></div>
+    </div>
+    <div class="table-wrap">
+      <table class="grid-table">
+        <colgroup><col style="width:15%"><col style="width:15%"><col style="width:16%"><col style="width:12%"><col style="width:17%"><col style="width:15%"></colgroup>
+        <thead><tr><th>登录名</th><th>昵称</th><th>角色</th><th>状态</th><th>最近登录</th><th>操作</th></tr></thead>
+        <tbody id="members-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <!-- 业务字典 -->
+    <div class="card">
+      <div class="card-head"><div class="card-title">业务字典</div></div>
+      <div class="card-body">
+        <div class="tag-row" id="dict-tags"></div>
+        <div class="muted" style="margin-top:10px">字典由系统维护（sys_dict），页面只读展示。</div>
+      </div>
+    </div>
+
+    <!-- 操作日志 -->
+    <div class="card">
+      <div class="card-head"><div class="card-title">操作日志（最近 10 条）</div></div>
+      <div class="table-wrap" style="padding-top:0">
+        <table class="grid-table">
+          <thead><tr><th>操作人</th><th>动作</th><th>对象</th><th>时间</th></tr></thead>
+          <tbody id="logs-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "agency", active: "settings", title: "旅行社设置", crumb: "其他" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+
+  document.querySelectorAll("[data-perm]").forEach(function (btn) {
+    if (!api.perm(btn.getAttribute("data-perm"))) btn.style.display = "none";
+  });
+
+  function renderProfile(s) {
+    var canEdit = api.perm("agency:settings:update");
+    var box = document.getElementById("profile-body");
+    box.innerHTML =
+      '<div class="field"><label>旅行社名称</label><input type="text" id="p-name" value="' + U.esc(s.agency_name) + '"' + (canEdit ? "" : " disabled") + "></div>" +
+      '<div class="field"><label>经营许可证号（不可修改）</label><input type="text" value="' + U.esc(s.license_no) + '" disabled></div>' +
+      '<div class="field"><label>联系人</label><input type="text" id="p-contact" value="' + U.esc(s.contact_name || "") + '"' + (canEdit ? "" : " disabled") + "></div>" +
+      '<div class="field"><label>联系电话</label><input type="text" id="p-phone" value="' + U.esc(s.contact_phone || "") + '"' + (canEdit ? "" : " disabled") + "></div>" +
+      '<div class="field" style="margin-top:12px"><label>社简介</label><textarea rows="3" id="p-intro"' + (canEdit ? "" : " disabled") + ">" + U.esc(s.intro || "") + "</textarea></div>" +
+      (canEdit ? '<div class="toolbar" style="padding:16px 0 0"><button class="btn btn-primary" type="button" id="save-profile">保存资料</button></div>' : "");
+    var saveBtn = box.querySelector("#save-profile");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", function () {
+        api.call("/admin/settings", "PUT", {
+          agency_name: box.querySelector("#p-name").value.trim(),
+          contact_name: box.querySelector("#p-contact").value.trim() || undefined,
+          contact_phone: box.querySelector("#p-phone").value.trim() || undefined,
+          intro: box.querySelector("#p-intro").value.trim() || undefined
+        }).then(function () { window.toast("资料已保存（已留痕）"); }).catch(U.toastError);
+      });
+    }
+  }
+
+  function renderNotify(prefs) {
+    var p = prefs || {};
+    var canEdit = api.perm("agency:settings:update");
+    var items = [
+      { key: "new_order", label: "新订单提醒" },
+      { key: "pending_warn", label: "待确认订单预警" },
+      { key: "stock_warn", label: "库存紧张提醒" },
+      { key: "daily_report", label: "每日经营简报" }
+    ];
+    var box = document.getElementById("notify-body");
+    box.innerHTML = '<div class="filters" style="flex-direction:column; align-items:flex-start; gap:14px">' +
+      items.map(function (it) {
+        return '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" data-notify="' + it.key + '"' +
+          (p[it.key] ? " checked" : "") + (canEdit ? "" : " disabled") + "> " + it.label + "</label>";
+      }).join("") + "</div>" +
+      (canEdit ? '<div class="toolbar" style="padding:14px 0 0"><button class="btn btn-primary btn-sm" id="save-notify">保存偏好</button></div>'
+        : '<div class="muted" style="margin-top:12px">通知渠道与推送规则为预留项。</div>');
+    var saveBtn = box.querySelector("#save-notify");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", function () {
+        var payload = {};
+        box.querySelectorAll("[data-notify]").forEach(function (cb) { payload[cb.getAttribute("data-notify")] = cb.checked; });
+        api.call("/admin/settings", "PUT", { agency_name: window.__agencyName || "旅行社", notify_prefs: payload })
+          .then(function () { window.toast("通知偏好已保存"); }).catch(U.toastError);
+      });
+    }
+  }
+
+  function renderMembers(members) {
+    U.fillTbody("#members-tbody", members, function (m) {
+      var actions = "";
+      var canUpdate = api.perm("agency:member:update");
+      if (canUpdate && m.status === "ACTIVE") {
+        actions = '<button class="btn-link danger" data-act="m-off" data-id="' + m.user_id + '">禁用</button>';
+      } else if (canUpdate) {
+        actions = '<button class="btn-link" data-act="m-on" data-id="' + m.user_id + '">启用</button>';
+      }
+      return "<tr><td>" + U.esc(m.username) + "</td><td>" + U.esc(m.nickname || "—") + "</td>" +
+        "<td>" + U.esc(m.role_name || "成员") + "</td><td>" + U.tag("ACCOUNT", m.status) + "</td>" +
+        "<td>" + (m.last_login_at ? U.dateTime(m.last_login_at) : "—") + "</td>" +
+        '<td><div class="cell-actions">' + (actions || '<span class="muted">—</span>') + "</div></td></tr>";
+    });
+    document.querySelectorAll("#members-tbody [data-act]").forEach(function (btn) {
+      var id = btn.getAttribute("data-id");
+      var off = btn.getAttribute("data-act") === "m-off";
+      btn.addEventListener("click", function () {
+        U.confirmDialog(off ? "确定禁用该成员账号？禁用后其会话将被撤销。" : "确定启用该成员账号？", function (close) {
+          api.call("/admin/members/" + id, "PATCH", { status: off ? "DISABLED" : "ACTIVE" }).then(function () {
+            close(); window.toast("已更新"); load();
+          }).catch(function (err) { close(); U.toastError(err); });
+        }, off);
+      });
+    });
+  }
+
+  function load() {
+    api.call("/admin/settings", "GET").then(function (s) {
+      window.__agencyName = s.agency_name;
+      renderProfile(s);
+      renderNotify(s.notify_prefs);
+      renderMembers(s.members || []);
+      var styleTags = (s.dict || []).filter(function (d) { return d.dict_type === "style_tag"; })
+        .map(function (d) { return '<span class="tag tag-muted">' + U.esc(d.dict_value) + "</span>"; }).join(" ");
+      document.getElementById("dict-tags").innerHTML = styleTags || '<span class="muted">—</span>';
+      U.fillTbody("#logs-tbody", s.audit_logs || [], function (l) {
+        return "<tr><td>" + U.esc(l.operator_name || "—") + "</td><td>" + U.esc(l.action) + "</td>" +
+          "<td>" + U.esc(l.object_no || "—") + "</td><td>" + U.dateTime(l.created_at) + "</td></tr>";
+      });
+    }).catch(function (err) { U.toastError(err); });
+  }
+
+  document.getElementById("m-new").addEventListener("click", function () {
+    U.formModal({
+      title: "新增社内成员",
+      note: "新成员归属本社，默认授予「业务专员」角色（只读 + 订单处理）。",
+      fields: [
+        { key: "username", label: "登录名（字母数字下划线）", required: true, placeholder: "如 agent04" },
+        { key: "nickname", label: "昵称", required: true },
+        { key: "phone", label: "手机号", placeholder: "11 位手机号（可选）" },
+        { key: "password", label: "初始密码（8-72 位）", type: "password", required: true }
+      ],
+      submitLabel: "创建成员",
+      onSubmit: function (values) {
+        return api.call("/admin/members", "POST", {
+          username: values.username, nickname: values.nickname,
+          phone: values.phone || undefined, password: values.password
+        }).then(function () { window.toast("成员已创建"); load(); });
+      }
+    });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

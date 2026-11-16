@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据分析中心 · 平台管理后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>数据分析中心</h1>
+    <p>全平台经营分析报表；统计口径来自埋点事件与订单聚合，数据来自 <code>/platform/analytics</code>。</p>
+  </div>
+
+  <div id="analytics-body">
+    <div class="split">
+      <!-- 转化漏斗 -->
+      <div class="card">
+        <div class="card-head"><div class="card-title">转化漏斗（近 <span id="funnel-days">30</span> 天）</div></div>
+        <div class="card-body" id="funnel-body"></div>
+      </div>
+
+      <!-- 趋势 -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">订单与交易额趋势</div>
+          <div class="card-actions">
+            <button class="btn btn-sm" type="button" data-days="7">7 天</button>
+            <button class="btn btn-sm" type="button" data-days="30">30 天</button>
+            <button class="btn btn-sm" type="button" data-days="90">90 天</button>
+          </div>
+        </div>
+        <div class="card-body" id="trend-body"></div>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-head"><div class="card-title">目的地热度</div></div>
+        <div class="card-body" id="dest-heat"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">用户画像</div></div>
+        <div class="card-body">
+          <div class="muted" style="margin-bottom:6px">兴趣偏好标签分布</div>
+          <div class="tag-row" id="tag-dist"></div>
+          <div class="muted" style="margin-top:12px;margin-bottom:6px">出发城市分布</div>
+          <div id="city-dist"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">旅行社业绩 TOP</div></div>
+        <div class="card-body">
+          <table class="grid-table">
+            <thead><tr><th>旅行社</th><th>在售</th><th>订单</th><th>交易额</th></tr></thead>
+            <tbody id="agency-perf"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">产品排行（按转化率）</div>
+        <div class="card-actions"><button class="btn btn-outline btn-sm" type="button" id="btn-export">导出 CSV</button></div>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:8%"><col style="width:26%"><col style="width:20%"><col style="width:14%"><col style="width:14%"><col style="width:18%"></colgroup>
+          <thead><tr><th>排名</th><th>产品</th><th>所属旅行社</th><th>访客</th><th>下单</th><th>转化率</th></tr></thead>
+          <tbody id="product-rank"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "platform", active: "analytics", title: "数据分析中心", crumb: "运营概览" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var days = 30;
+  var lastData = null;
+
+  function render() {
+    var d = lastData;
+    document.getElementById("funnel-days").textContent = days;
+
+    // 转化漏斗
+    var f = d.funnel;
+    var maxV = Math.max(Number(f.visits), 1);
+    var steps = [
+      { label: "访客数", val: f.visits },
+      { label: "生成行程", val: f.plans },
+      { label: "下单", val: f.orders },
+      { label: "成交", val: f.deals }
+    ];
+    var rate = function (a, b) { return b > 0 ? (Number(a) / Number(b) * 100).toFixed(1) + "%" : "—"; };
+    document.getElementById("funnel-body").innerHTML =
+      steps.map(function (s) {
+        var pct = Math.max(4, Math.round(Number(s.val) / maxV * 100));
+        var cls = pct > 55 ? "fill" : "";
+        return '<div class="funnel-step"><span>' + s.label + '</span>' +
+          '<div class="funnel-bar ' + cls + '" style="width:' + pct + '%"></div>' +
+          '<span class="val">' + Number(s.val) + "</span></div>";
+      }).join("") +
+      '<div class="muted" style="margin-top:12px">环节转化率：访客→生成 ' + rate(f.plans, f.visits) +
+      " · 生成→下单 " + rate(f.orders, f.plans) + " · 下单→成交 " + rate(f.deals, f.orders) + "</div>";
+
+    // 趋势
+    U.lineChart(document.getElementById("trend-body"), [
+      { label: "订单量", color: "#378044", data: d.trend.map(function (r) { return Number(r.orders); }) },
+      { label: "交易额（千元）", color: "#7fb98a", data: d.trend.map(function (r) { return Math.round(Number(r.amount) / 1000); }) }
+    ], d.trend.map(function (r) { return String(r.day).slice(5); }));
+
+    // 目的地热度
+    var heat = d.destination_heat;
+    var maxH = Math.max.apply(null, heat.map(function (x) { return Number(x.visits); })) || 1;
+    document.getElementById("dest-heat").innerHTML = heat.map(function (x) {
+      var pct = Math.round(Number(x.visits) / maxH * 100);
+      return '<div class="bar-row"><span>' + U.esc(x.destination) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+        '<span class="val">' + Number(x.visits) + "</span></div>";
+    }).join("") || '<div class="muted">暂无数据</div>';
+
+    // 用户画像
+    var tagTotal = d.tag_distribution.reduce(function (s, t) { return s + Number(t.cnt); }, 0) || 1;
+    document.getElementById("tag-dist").innerHTML = d.tag_distribution.map(function (t, i) {
+      var cls = i < 3 ? "tag-info" : "tag-muted";
+      var pct = (Number(t.cnt) / tagTotal * 100).toFixed(0);
+      return '<span class="tag ' + cls + '">' + U.esc(t.tag_value) + " " + pct + "%</span>";
+    }).join("") || '<span class="tag tag-muted">暂无标签数据</span>';
+    var cityTotal = d.city_distribution.reduce(function (s, c) { return s + Number(c.cnt); }, 0) || 1;
+    document.getElementById("city-dist").innerHTML = d.city_distribution.map(function (c) {
+      var pct = (Number(c.cnt) / cityTotal * 100).toFixed(0);
+      return '<div class="bar-row"><span>' + U.esc(c.city || "未知") + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(4, pct) + '%"></div></div>' +
+        '<span class="val">' + pct + "%</span></div>";
+    }).join("") || '<div class="muted">暂无城市数据</div>';
+
+    // 旅行社业绩
+    document.getElementById("agency-perf").innerHTML = d.agency_performance.map(function (a) {
+      return "<tr><td>" + U.esc(a.agency_name) + "</td><td>" + a.onsale_products + "</td><td>" +
+        a.order_count + "</td><td>" + U.money(a.total_amount) + "</td></tr>";
+    }).join("") || '<tr><td colspan="4" class="muted">暂无数据</td></tr>';
+
+    // 产品排行
+    document.getElementById("product-rank").innerHTML = d.product_rank.map(function (p, i) {
+      return "<tr><td>" + (i + 1) + "</td><td>" + U.esc(p.title) + "</td><td>" + U.esc(p.agency_name) +
+        "</td><td>" + p.visitor_count + "</td><td>" + (p.order_count || 0) + "</td><td><b>" +
+        (Number(p.conversion_rate) * 100).toFixed(1) + "%</b></td></tr>";
+    }).join("") || '<tr><td colspan="6" class="muted">暂无数据</td></tr>';
+  }
+
+  function load() {
+    U.loadInto("#analytics-body", function () { return api.call("/platform/analytics?days=" + days, "GET"); }, function (data) {
+      lastData = data; render();
+    });
+  }
+
+  document.querySelectorAll("[data-days]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      days = Number(btn.getAttribute("data-days"));
+      document.querySelectorAll("[data-days]").forEach(function (b) { b.classList.remove("btn-primary"); });
+      btn.classList.add("btn-primary");
+      load();
+    });
+  });
+  document.querySelector('[data-days="30"]').classList.add("btn-primary");
+
+  document.getElementById("btn-export").addEventListener("click", function () {
+    if (!lastData) return;
+    U.downloadCsv("产品排行.csv", ["排名", "产品", "所属旅行社", "访客", "下单", "转化率"],
+      lastData.product_rank.map(function (p, i) {
+        return [i + 1, p.title, p.agency_name, p.visitor_count, p.order_count || 0, (Number(p.conversion_rate) * 100).toFixed(1) + "%"];
+      }));
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>订单与交易管理 · 平台管理后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>订单与交易管理</h1>
+    <p>跨旅行社的全量订单监督与追溯；平台以查看监督为主，订单确认由对应责任方执行。数据来自 <code>/platform/orders</code>。</p>
+  </div>
+
+  <div class="card">
+    <div class="filters">
+      <div class="field"><label>订单号 / 手机号</label><input type="text" id="f-keyword" placeholder="订单号或联系电话"></div>
+      <div class="field"><label>旅行社</label><select id="f-agency"><option value="">全部</option></select></div>
+      <div class="field"><label>订单状态</label>
+        <select id="f-status">
+          <option value="">全部</option><option value="PENDING">待支付</option><option value="PAID">待确认</option>
+          <option value="CONFIRMED">已确认</option><option value="COMPLETED">已完成</option>
+          <option value="CANCELLED">已取消</option><option value="REFUNDED">已退款</option>
+        </select>
+      </div>
+      <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="btn-search">查询</button></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn btn-outline" type="button" id="btn-export">导出（脱敏）</button>
+      <span class="muted" id="total-hint">加载中…</span>
+    </div>
+    <div class="table-wrap">
+      <table class="grid-table">
+        <colgroup><col style="width:12%"><col style="width:17%"><col style="width:17%"><col style="width:12%"><col style="width:7%"><col style="width:10%"><col style="width:11%"><col style="width:14%"></colgroup>
+        <thead><tr><th>订单号</th><th>所属旅行社</th><th>线路产品</th><th>客户</th><th>人数</th><th>金额</th><th>状态</th><th>下单时间 / 操作</th></tr></thead>
+        <tbody id="tbody"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pager"></div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "platform", active: "orders", title: "订单与交易管理", crumb: "治理与交易" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var state = { page: 1, size: 10, total: 0 };
+  var lastList = [];
+
+  function val(sel) { var el = document.querySelector(sel); return el ? el.value.trim() : ""; }
+
+  // 机构筛选下拉
+  api.call("/platform/agencies?size=100", "GET").then(function (d) {
+    var sel = document.getElementById("f-agency");
+    d.list.forEach(function (a) {
+      var opt = document.createElement("option");
+      opt.value = a.agency_id; opt.textContent = a.agency_name;
+      sel.appendChild(opt);
+    });
+  }).catch(function () { /* 筛选项加载失败不阻断列表 */ });
+
+  function load() {
+    var params = {
+      page: state.page, size: state.size,
+      keyword: val("#f-keyword"), status: val("#f-status"), agency_id: val("#f-agency")
+    };
+    api.call("/platform/orders" + U.query(params), "GET").then(function (data) {
+      state.total = data.total;
+      lastList = data.list;
+      document.getElementById("total-hint").textContent = "共 " + data.total + " 笔订单";
+      U.fillTbody("#tbody", data.list, function (r) {
+        return "<tr><td>" + U.esc(r.order_no) + "</td><td>" + U.esc(r.agency_name) + "</td><td>" + U.esc(r.route_title) + "</td>" +
+          "<td>" + U.esc(r.contact_phone || r.contact_name || "—") + "</td>" +
+          "<td>" + r.people_count + "</td><td>" + U.money(r.amount) + "</td>" +
+          "<td>" + U.tag("ORDER", r.status) + "</td>" +
+          '<td>' + U.dateTime(r.created_at) +
+          '<div class="cell-actions"><button class="btn-link" data-id="' + r.order_id + '">详情</button></div></td></tr>';
+      });
+      U.pagination("#pager", { total: state.total, size: state.size, page: state.page, onPage: function (p) { state.page = p; load(); } });
+    }).catch(U.toastError);
+  }
+
+  // 详情抽屉：状态时间轴由服务端关键字段推导（平台侧无单条订单接口，只读监督）
+  function openDetail(orderId) {
+    var r = null;
+    for (var i = 0; i < lastList.length; i++) if (String(lastList[i].order_id) === String(orderId)) r = lastList[i];
+    if (!r) return;
+    var st = r.status;
+    function li(label, time, cls) {
+      return '<li class="' + (cls || "") + '"><div class="s">' + label + '</div><div class="t">' + time + "</div></li>";
+    }
+    var tl = li("订单创建（锁位）", U.dateTime(r.created_at), "done");
+    if (r.paid_at) tl += li("支付成功", U.dateTime(r.paid_at), "done");
+    else tl += li("支付成功", "待支付");
+    if (st === "CANCELLED") tl += li("订单取消", "已取消");
+    else if (st === "REFUNDED") { tl += li("社管确认处理", "—"); tl += li("退款完成", "已退款", "done"); }
+    else if (["CONFIRMED", "COMPLETED"].indexOf(st) >= 0) {
+      tl += li("社管确认处理", "已确认", "done");
+      tl += li("出行完成", st === "COMPLETED" ? "已完成" : "待出行后更新", st === "COMPLETED" ? "done" : "");
+    } else tl += li("社管确认处理", "待处理");
+
+    var html =
+      '<div class="desc-list">' +
+      '<div class="desc-item"><div class="k">订单号</div><div class="v">' + U.esc(r.order_no) + "</div></div>" +
+      '<div class="desc-item"><div class="k">所属旅行社</div><div class="v">' + U.esc(r.agency_name) + "</div></div>" +
+      '<div class="desc-item"><div class="k">线路产品</div><div class="v">' + U.esc(r.route_title) + "</div></div>" +
+      '<div class="desc-item"><div class="k">客户</div><div class="v">' + U.esc(r.contact_name || "—") + " · " + U.esc(r.contact_phone || "—") + "</div></div>" +
+      '<div class="desc-item"><div class="k">出行日期</div><div class="v">' + U.date(r.travel_date) + "</div></div>" +
+      '<div class="desc-item"><div class="k">出行人数</div><div class="v">' + r.people_count + " 人</div></div>" +
+      '<div class="desc-item"><div class="k">订单金额</div><div class="v">' + U.money(r.amount) + "</div></div>" +
+      '<div class="desc-item"><div class="k">订单状态</div><div class="v">' + U.tag("ORDER", r.status) + "</div></div>" +
+      "</div>" +
+      '<h3 style="margin:22px 0 10px;font-size:14px">状态流转</h3>' +
+      '<ul class="timeline">' + tl + "</ul>" +
+      '<div class="muted" style="font-size:12px;margin-top:12px">平台侧为只读监督视图；确认、退款等操作由责任旅行社在其工作台执行。</div>';
+    U.drawer("订单详情 · " + U.esc(r.order_no), html);
+  }
+
+  document.getElementById("tbody").addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-id]");
+    if (btn) openDetail(btn.getAttribute("data-id"));
+  });
+  document.getElementById("btn-search").addEventListener("click", function () { state.page = 1; load(); });
+  document.getElementById("f-keyword").addEventListener("keydown", function (e) { if (e.key === "Enter") { state.page = 1; load(); } });
+  document.getElementById("btn-export").addEventListener("click", function () {
+    U.downloadCsv("平台订单明细.csv", [
+      { label: "订单号", key: "order_no" }, { label: "旅行社", key: "agency_name" },
+      { label: "线路产品", key: "route_title" }, { label: "联系人", key: "contact_name" },
+      { label: "联系电话（脱敏）", key: "contact_phone" }, { label: "人数", key: "people_count" },
+      { label: "金额", key: "amount" }, { label: "状态", key: "status" },
+      { label: "下单时间", key: "created_at" }, { label: "支付时间", key: "paid_at" }
+    ], lastList);
+  });
+
+  // 支持 dashboard 直达 ?status=PAID
+  var urlStatus = new URLSearchParams(location.search).get("status");
+  if (urlStatus) document.getElementById("f-status").value = urlStatus;
+  load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>财务管理 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>财务管理</h1>
+    <p>本社收入与对账的只读汇总视图；结算动作由平台侧发起，本页查看结果并导出明细。金额一律以订单为准。</p>
+  </div>
+
+  <div id="finance-body">
+    <div class="kpi-grid" id="f-kpi"></div>
+
+    <div class="card">
+      <div class="filters">
+        <div class="field"><label>结算状态</label><select id="f-settle">
+          <option value="">全部</option><option value="PENDING">待结算</option><option value="SETTLED">已结算</option><option value="REJECTED">已驳回</option>
+        </select></div>
+        <div class="field"><label>订单状态</label><select id="f-status">
+          <option value="">全部</option><option value="PAID">待确认</option><option value="CONFIRMED">已确认</option>
+          <option value="COMPLETED">已完成</option><option value="REFUNDED">已退款</option>
+        </select></div>
+        <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="f-search">查询</button></div>
+      </div>
+      <div class="toolbar">
+        <button class="btn btn-outline" type="button" id="f-export">导出对账单</button>
+        <span class="muted" id="f-total">—</span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:14%"><col style="width:20%"><col style="width:12%"><col style="width:7%"><col style="width:11%"><col style="width:10%"><col style="width:12%"><col style="width:14%"></colgroup>
+          <thead><tr><th>订单号</th><th>线路产品</th><th>客户</th><th>人数</th><th>订单金额</th><th>订单状态</th><th>结算状态</th><th>结算周期</th></tr></thead>
+          <tbody id="flows-tbody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="f-pager"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="card-title">按产品汇总（已确认 + 已完成订单金额）</div></div>
+      <div class="card-body" id="f-summary"></div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "agency", active: "finance", title: "财务管理", crumb: "其他" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var state = { page: 1, size: 10, settle: "", status: "" };
+
+  function loadSummary() {
+    api.call("/admin/finance/summary", "GET").then(function (s) {
+      document.getElementById("f-kpi").innerHTML = [
+        { label: "待确认金额", num: U.moneyShort(s.pending_confirm_amount), sub: s.pending_confirm_count + " 笔待确认订单", cls: "" },
+        { label: "待结算金额", num: U.moneyShort(s.unsettled_amount), sub: "本结算周期", cls: "" },
+        { label: "已结算金额", num: U.moneyShort(s.settled_amount), sub: "已确认 + 已完成", cls: "up" },
+        { label: "退款金额", num: U.moneyShort(s.refunded_amount), sub: s.refunded_count + " 笔退款", cls: "down" }
+      ].map(function (k) {
+        return '<div class="kpi-card"><div class="kpi-label">' + k.label + '</div>' +
+          '<div class="kpi-num">' + k.num + '</div><div class="kpi-sub ' + k.cls + '">' + U.esc(k.sub) + "</div></div>";
+      }).join("");
+    }).catch(U.toastError);
+    api.call("/admin/analytics", "GET").catch(function () { /* 顶部汇总仅 KPI，失败不阻塞 */ });
+    // 按产品汇总：取订单流水按线路聚合
+    api.call("/admin/finance/flows?page=1&size=100", "GET").then(function (data) {
+      var byRoute = {};
+      (data.list || []).forEach(function (o) {
+        if (o.status !== "CONFIRMED" && o.status !== "COMPLETED") return;
+        byRoute[o.route_title] = (byRoute[o.route_title] || 0) + Number(o.amount);
+      });
+      var rows = Object.keys(byRoute).map(function (k) { return { label: k, value: byRoute[k], display: U.moneyShort(byRoute[k]) }; });
+      U.bars(document.getElementById("f-summary"), rows.length ? rows : [{ label: "暂无数据", value: 0, display: "—" }]);
+    }).catch(function () { /* 汇总图失败不阻塞 */ });
+  }
+
+  function load() {
+    U.loadInto("#flows-tbody", function () {
+      return api.call("/admin/finance/flows" + U.query({
+        page: state.page, size: state.size, status: state.status || undefined
+      }), "GET");
+    }, function (data) {
+      var list = data.list.filter(function (o) { return !state.settle || o.settle_status === state.settle; });
+      document.getElementById("f-total").textContent = "共 " + data.total + " 笔流水";
+      U.fillTbody("#flows-tbody", list, function (o) {
+        return "<tr><td>" + U.esc(o.order_no) + "</td><td>" + U.esc(o.route_title) + "</td>" +
+          "<td>" + U.esc(o.contact_phone || "—") + "</td><td>" + o.people_count + "</td>" +
+          "<td>" + U.money(o.amount) + "</td><td>" + U.tag("ORDER", o.status) + "</td>" +
+          "<td>" + U.tag("SETTLE", o.settle_status) + "</td><td>" + U.esc(o.period_label || "未归属") + "</td></tr>";
+      });
+      U.pagination("#f-pager", { page: state.page, size: state.size, total: data.total, onPage: function (p) { state.page = p; load(); } });
+    });
+  }
+
+  document.getElementById("f-search").addEventListener("click", function () {
+    state.page = 1;
+    state.settle = document.getElementById("f-settle").value;
+    state.status = document.getElementById("f-status").value;
+    load();
+  });
+  document.getElementById("f-export").addEventListener("click", function () {
+    api.call("/admin/finance/flows?page=1&size=100" + (state.status ? "&status=" + state.status : ""), "GET").then(function (data) {
+      var rows = (data.list || []).filter(function (o) { return !state.settle || o.settle_status === state.settle; });
+      if (!rows.length) { window.toast("没有可导出的流水"); return; }
+      U.downloadCsv("对账单", [
+        { label: "订单号", key: "order_no" }, { label: "线路产品", key: "route_title" },
+        { label: "客户", key: "contact_phone" }, { label: "人数", key: "people_count" },
+        { label: "订单金额", key: "amount" },
+        { label: "订单状态", value: function (r) { return (U.DICTS.ORDER[r.status] || {}).label || r.status; } },
+        { label: "结算状态", value: function (r) { return (U.DICTS.SETTLE[r.settle_status] || {}).label || r.settle_status; } },
+        { label: "结算周期", key: "period_label" },
+        { label: "支付时间", value: function (r) { return U.dateTime(r.paid_at); } }
+      ], rows);
+      window.toast("已导出 " + rows.length + " 条流水（脱敏）");
+    }).catch(U.toastError);
+  });
+
+  loadSummary();
+  load();
+})();
+</script>
+</body>
+</html>

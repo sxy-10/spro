@@ -3,12 +3,12 @@
  * 验证 api/rbacRouter.ts 的 9 个接口：权限树、角色 CRUD、角色授权、当前用户；
  * 并验收 Casbin 授权层：策略确实从数据库加载、写权限后立即生效（第 7 段）。
  *
- * 前置：库已执行 01_schema.sql → 05_rbac_schema.sql；backend/.env 配好 DB_*。
+ * 前置：库已执行 01_schema.sql → 05_rbac_schema.sql → 08_rbac_complete.sql；backend/.env 配好 DB_*。
  * 账号：脚本会自动创建/重置 3 个联调账号（13800000001 超管 / 13800000002 社管 /
  *      13800000003 游客，密码 Passw0rd!23），不依赖 02_seed.sql 的占位哈希。
  * 运行：cd backend && npm run e2e:rbac
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { RowDataPacket } from 'mysql2/promise';
 import { app } from '../app.js';
@@ -96,6 +96,16 @@ async function ensureDemoAccounts(): Promise<void> {
     if (token) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers['Idempotency-Key'] = randomUUID();
     if (method !== 'GET' && body === undefined) headers['Idempotency-Key'] = randomUUID();
+    if (token && body !== undefined) {
+      const timestamp = new Date().toISOString();
+      const nonce = randomUUID();
+      const digest = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+      headers['X-Timestamp'] = timestamp;
+      headers['X-Nonce'] = nonce;
+      headers['X-Signature'] = createHmac('sha256', token)
+        .update(`${method}\n/v1${path}\n${timestamp}\n${nonce}\n${digest}`)
+        .digest('hex');
+    }
     const response = await fetch(`${base}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: response.status, body: (await response.json()) as any };
   };
@@ -106,6 +116,19 @@ async function ensureDemoAccounts(): Promise<void> {
   const touristToken = await login('13800000003');
   console.log('三个角色登录成功\n');
 
+  console.log('=== 0. 健康检查 / 管理接口角色矩阵 ===');
+  check('匿名 GET /health → 200', (await call(null, '/health')).status, 200);
+  check('游客 GET /admin/routes → 403/20013',
+    [(await call(touristToken, '/admin/routes')).status, (await call(touristToken, '/admin/routes')).body.code],
+    [403, 20013]);
+  check('社管 GET /admin/routes → 200', (await call(agencyToken, '/admin/routes')).status, 200);
+  check('超管 GET /admin/routes → 200', (await call(superToken, '/admin/routes')).status, 200);
+  check('游客 GET /admin/orders → 403/20013',
+    [(await call(touristToken, '/admin/orders')).status, (await call(touristToken, '/admin/orders')).body.code],
+    [403, 20013]);
+  check('社管 GET /admin/orders → 200', (await call(agencyToken, '/admin/orders')).status, 200);
+  check('超管 GET /admin/orders → 200', (await call(superToken, '/admin/orders')).status, 200);
+
   console.log('=== 1. 未登录 / 当前用户 ===');
   check('未登录 GET /users/me → 401', (await call(null, '/users/me')).status, 401);
 
@@ -115,7 +138,15 @@ async function ensureDemoAccounts(): Promise<void> {
 
   console.log('\n=== 2. GET /users/me/permissions（前端动态路由数据源）===');
   const touristPerms = await call(touristToken, '/users/me/permissions');
-  check('游客 → 200 且菜单/按钮均为空', [touristPerms.status, touristPerms.body.data.menus.length, touristPerms.body.data.buttons.length], [200, 0, 0]);
+  check('游客 → 200 且获得 6 个业务按钮', [touristPerms.status, touristPerms.body.data.buttons.length], [200, 6]);
+  check('游客按钮包含聊天/行程创建/预订权限',
+    ['chat:session:query', 'chat:message:query', 'chat:message:add', 'itinerary:plan:add', 'order:booking:add', 'order:booking:query']
+      .every((code) => touristPerms.body.data.buttons.some((button: any) => button.code === code)), true);
+  check('游客可读取会话列表', (await call(touristToken, '/chat/sessions')).status, 200);
+  const createdChat = await call(touristToken, '/chat/sessions', 'POST', { content: 'RBAC 联调消息' });
+  check('游客可创建会话并写入首条消息', createdChat.status, 201);
+  const chatHistory = await call(touristToken, `/chat/sessions/${createdChat.body.data.session_id}/messages`);
+  check('游客可读取新会话历史', [chatHistory.status, chatHistory.body.data.total], [200, 1]);
 
   const agencyPerms = await call(agencyToken, '/users/me/permissions');
   const menuCodes = JSON.stringify(agencyPerms.body.data.menus);
@@ -125,7 +156,7 @@ async function ensureDemoAccounts(): Promise<void> {
   check('不含 system 菜单', menuCodes.includes('"system"'), false);
 
   const superPerms = await call(superToken, '/users/me/permissions');
-  check('超管按钮数 = 25（全部 BUTTON）', superPerms.body.data.buttons.length, 25);
+  check('超管按钮数 = 31（全部 BUTTON）', superPerms.body.data.buttons.length, 31);
 
   console.log('\n=== 3. 角色列表的越权拦截 ===');
   check('社管 GET /roles → 403/20013', [ (await call(agencyToken, '/roles')).status, (await call(agencyToken, '/roles')).body.code ], [403, 20013]);
@@ -161,10 +192,10 @@ async function ensureDemoAccounts(): Promise<void> {
   console.log('\n=== 6. 权限树 ===');
   const tree = await call(superToken, '/permissions');
   check('超管 GET /permissions → 200', tree.status, 200);
-  check('权限总数 35', tree.body.data.total, 35);
-  check('根节点 4 个模块', tree.body.data.list.map((n: any) => n.code), ['system', 'route', 'order', 'itinerary']);
+  check('权限总数 44', tree.body.data.total, 44);
+  check('根节点 5 个模块', tree.body.data.list.map((n: any) => n.code), ['system', 'route', 'order', 'itinerary', 'chat']);
   check('system 下挂 3 个二级菜单', tree.body.data.list[0].children.map((c: any) => c.code), ['system:role', 'system:user', 'system:permission']);
-  check('按钮数与 BUTTON 行数一致', tree.body.data.buttons.length, 25);
+  check('按钮数与 BUTTON 行数一致', tree.body.data.buttons.length, 31);
 
   console.log('\n=== 7. Casbin 策略热更新（组员2 阶段二验收点）===');
   // 权限 id：201 = route:line:add，204 = route:line:query（见 05_rbac_schema.sql 种子）

@@ -4,6 +4,7 @@ import cors from 'cors';
 import compression from 'compression';
 import { randomUUID } from 'node:crypto';
 import { api } from './api/router.js';
+import { seckillRouter } from './api/seckillRouter.js';
 import { ApiError, errors } from './api/core.js';
 import passport from './auth/passport.js';
 
@@ -28,7 +29,18 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(cors({ origin: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(','), exposedHeaders: ['X-Trace-Id','Retry-After'] }));
+const whitelist = (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',');
+// 开发环境放行本机任意端口来源（localhost / 127.0.0.1），便于 IDE 预览等场景
+const devLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || whitelist.includes(origin) || (process.env.NODE_ENV !== 'production' && devLocalOrigin.test(origin))) {
+      cb(null, true); return;
+    }
+    cb(null, false);
+  },
+  exposedHeaders: ['X-Trace-Id', 'Retry-After'],
+}));
 app.use(compression());
 app.use(express.json({ limit: '64kb', strict: true }));
 app.use((req, _res, next) => {
@@ -42,5 +54,6 @@ app.use((req, _res, next) => {
 });
 app.use(passport.initialize());
 app.use('/v1', api);
+app.use('/v1', seckillRouter);
 app.use((_req, _res, next) => next(new ApiError(404,20016,'接口不存在')));
 app.use(errors);

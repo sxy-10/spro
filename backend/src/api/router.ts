@@ -13,8 +13,14 @@ import { ApiError, id, mobile, utc, money, reply, run, page, list, write, secret
 import { authenticateJwt } from '../auth/passport.js';
 import { requirePermission } from '../auth/rbac.js';
 import { rbac } from './rbacRouter.js';
+import { agencyExt } from './agencyExtRouter.js';
+import { platform } from './platformRouter.js';
+import { chatRouter } from './chatRouter.js';
+import { aiAgentRouter } from './aiAgentRouter.js';
 import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
+import { bearerToken, dropCachedUser } from '../auth/sessionCache.js';
+import { listDict, isDictType } from '../db/dict.js';
 
 export const api = Router();
 const planner = new TravelPlannerAgent();
@@ -28,10 +34,11 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 
 /* ------------------------------------------------------------------ *
  * 组员4 补丁：图形验证码 / 短信验证码 / 令牌刷新
- * 1. 图形验证码改为「服务端存 captcha_id → code，5 分钟过期，校验即消费」，
- *    不再写死 aaaa（未带 X-Captcha-Id 时保留 aaaa 后门，供 e2e 与接口自测）。
- * 2. 短信验证码新增 /auth/sms/send 下发 6 位码，登录/重置密码按码校验；
- *    开发环境仍兼容固定 123456（既有联调脚本与文档依赖它）。
+ * 1. 图形验证码为「服务端存 captcha_id → code，5 分钟过期，校验即消费」，
+ *    登录时必须带 X-Captcha-Id，按图片上的字符校验（忽略大小写与首尾空格）。
+ *    已移除历史遗留的固定 aaaa 后门——它让验证码形同虚设。
+ * 2. 短信验证码由 /auth/sms/send 下发 6 位随机码，登录/重置密码按该码校验；
+ *    同样已移除固定 123456 后门，只有真正收到的码才能通过。
  * 3. 新增 /auth/refresh，供前端 401 时静默换票（滑动续期，复用 api_session）。
  * 单体演示用内存表足够；多实例部署请换成 Redis（ioredis 已在依赖内）。
  * ------------------------------------------------------------------ */
@@ -39,8 +46,6 @@ const captchaStore = new Map<string, { code: string; expiresAt: number }>();
 const smsCodeStore = new Map<string, { code: string; expiresAt: number }>();
 const CAPTCHA_TTL_MS = 5 * 60 * 1000;
 const SMS_TTL_MS = 5 * 60 * 1000;
-const DEV_CAPTCHA_CODE = 'aaaa';
-const DEV_SMS_CODE = '123456';
 const codeStores = [captchaStore, smsCodeStore];
 const sweepTimer = setInterval(() => {
   const now = Date.now();
@@ -50,17 +55,20 @@ const sweepTimer = setInterval(() => {
 }, 60_000);
 sweepTimer.unref();
 
-/** 校验并消费一次性验证码；开发环境额外放行固定后门值 */
+/**
+ * 校验并消费一次性验证码。
+ * 一次性：无论对错都立即删除该 key，避免同一张图/同一个码被反复尝试（防重放）。
+ * 图形验证码按图片字符比对，统一转小写后比较，因此大小写都能通过。
+ */
 const consumeCode = (
   store: Map<string, { code: string; expiresAt: number }>,
   key: string,
-  code: string,
-  devFallback: string
+  code: string
 ): boolean => {
   const record = store.get(key);
   store.delete(key);
-  if (record && record.expiresAt > Date.now() && record.code === code.toLowerCase()) return true;
-  return process.env.NODE_ENV !== 'production' && code.toLowerCase() === devFallback;
+  if (!record || record.expiresAt <= Date.now()) return false;
+  return record.code === code.trim().toLowerCase();
 };
 
 /** 签发 access token + refresh token（refresh 用 typ 标记，避免被当成 access token 使用） */
@@ -70,6 +78,7 @@ const issueTokens = (userId: string, sessionId: string) => ({
   expires_in: 1800
 });
 
+api.get('/health', (_req, res) => reply(res, { status: 'ok' }));
 api.use((req, _res, next) => { rateLimit(`ip:${req.ip}`, 120).then(() => next(), next); });
 
 api.post('/auth/register', run(async (req, res) => {
@@ -123,8 +132,8 @@ api.post('/auth/login/sms', run(async (req, res) => {
     await rateLimit(`auth:${req.ip}`, 10);
     await checkLoginLockout(body.mobile);
 
-    // 短信验证码：优先校验 /auth/sms/send 下发的码，开发环境兼容固定 123456
-    if (!consumeCode(smsCodeStore, `${body.mobile}:login`, body.sms_code, DEV_SMS_CODE)) {
+    // 短信验证码：只认 /auth/sms/send 实际下发的 6 位码（已移除固定 123456 后门）
+    if (!consumeCode(smsCodeStore, `${body.mobile}:login`, body.sms_code)) {
         await recordLoginFailure(body.mobile);
         throw new ApiError(400, 10001, '验证码错误或已过期');
     }
@@ -151,8 +160,8 @@ api.post('/auth/reset-password', run(async (req, res) => {
     const body = z.object({ mobile, sms_code: z.string().length(6), new_password: z.string().min(8).max(72) }).strict().parse(req.body);
     await rateLimit(`auth:${req.ip}`, 10);
 
-    // 短信验证码：与登录共用一套下发/校验逻辑（scene=reset）
-    if (!consumeCode(smsCodeStore, `${body.mobile}:reset`, body.sms_code, DEV_SMS_CODE)) {
+    // 短信验证码：与登录共用一套下发/校验逻辑（scene=reset），只认实际下发的码
+    if (!consumeCode(smsCodeStore, `${body.mobile}:reset`, body.sms_code)) {
         throw new ApiError(400, 10001, '验证码错误或已过期');
     }
 
@@ -219,13 +228,13 @@ api.post('/auth/login/account', run(async (req, res) => {
 
     await rateLimit(`auth:${req.ip}`, 10);
 
-    // 图形验证码：按 captcha_id 校验，一次性消费。
-    // captcha_id 走请求头 X-Captcha-Id（放进请求体会被 .strict() 拒掉）。
+    // 图形验证码：必须带 captcha_id（请求头 X-Captcha-Id；放进请求体会被 .strict() 拒掉），
+    // 按该 id 对应的图片答案校验，忽略大小写，校验一次即消费。
     const captchaId = String(req.get('X-Captcha-Id') ?? '');
-    const captchaOk = captchaId
-        ? consumeCode(captchaStore, captchaId, body.captcha_code, DEV_CAPTCHA_CODE)
-        : consumeCode(captchaStore, '', body.captcha_code, DEV_CAPTCHA_CODE);
-    if (!captchaOk) {
+    if (!captchaId) {
+        throw new ApiError(400, 10001, '图形验证码已失效，请点击图片刷新后重试');
+    }
+    if (!consumeCode(captchaStore, captchaId, body.captcha_code)) {
         throw new ApiError(400, 10001, '图形验证码错误或已过期');
     }
 
@@ -282,6 +291,16 @@ api.get('/spots', run(async (req, res) => {
   reply(res, await list(pool, `SELECT id,id AS spot_id,name,city_name,address,rating,opening_hours,cover_image_url,created_at ${where}`, `SELECT COUNT(*) total ${where}`, p.city_name ? [p.city_name] : [], p));
 }));
 
+// 基础字典（组员1 · 阶段一）：民族 / 出发城市 / 旅行风格 / 餐饮偏好 / 季节
+// 公开接口，不需要登录——注册页和筛选器在未登录时也要用。
+// 走 Redis 缓存（dict:{type}，1 小时），所以这里可以放心放开 Cache-Control。
+api.get('/dict/:type', run(async (req, res) => {
+  const type = String(req.params.type ?? '').trim();
+  if (!isDictType(type)) throw new ApiError(400, 10001, '不支持的字典类型');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  reply(res, await listDict(type));
+}));
+
 // 刷新令牌（组员4 补丁）：前端 401 时静默换票。
 // 必须放在 authenticateJwt 之前——换票请求本身是匿名的（只带 refresh_token）。
 api.post('/auth/refresh', run(async (req, res) => {
@@ -323,15 +342,25 @@ api.post('/auth/refresh', run(async (req, res) => {
   });
 }));
 
+// 智能体与 DeepSeek 大模型核心对话（游客与登录用户均可使用）
+api.use('/ai', aiAgentRouter);
+
 api.use(authenticateJwt);
 api.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store'); rateLimit(`user:${res.locals.user.id}`, 90).then(() => next(), next); });
+api.use('/chat', chatRouter);
 // RBAC 管理接口（角色/权限/当前用户），见 api/rbacRouter.ts
 api.use(rbac);
+// Web 端（B 端旅行社 + 平台方）扩展接口，见 agencyExtRouter.ts / platformRouter.ts
+api.use(agencyExt);
+api.use(platform);
 api.post('/auth/logout', run(async (req, res) => {
   await write(req, res, async conn => {
     await conn.query('UPDATE api_session SET is_revoked=1 WHERE session_id=?', [res.locals.sessionId]);
     return { data: null };
   });
+  // 阶段一：MySQL 里的会话已吊销，Redis 缓存也要立刻删掉，否则在 TTL 内仍能通过认证
+  const token = bearerToken(req.headers.authorization);
+  if (token) await dropCachedUser(token);
 }));
 api.get('/users/:id', run(async (req, res) => {
   const userId = id.parse(req.params.id);
@@ -470,9 +499,16 @@ api.post('/spots/:id/comments',run(async(req,res)=>{
 // 管理端统一由 RBAC 权限码守卫：不再硬编码角色判断，权限来源改为 sys_user_role → sys_role_permission
 // 数据级隔离（agency_id）仍由各 handler 自行按 res.locals.user.agency_id 收口
 api.get('/admin/routes', requirePermission('route:line:query'), run(async(req,res)=>{
-  const p=page(req.query,['created_at','base_price_rmb']);
-  const where='FROM travel_product WHERE agency_id=?';
-  reply(res,await list(pool,`SELECT ${routeFields} ${where}`,`SELECT COUNT(*) total ${where}`,[res.locals.user.agency_id],p));
+  const p=page(req.query,['created_at','base_price_rmb','conversion_rate'],{
+    keyword:z.string().max(100).optional(),
+    status:z.enum(['DRAFT','ON_SALE','OFF_SALE']).optional()
+  });
+  const conds=['agency_id=?']; const params:any[]=[res.locals.user.agency_id];
+  if(p.keyword){conds.push('(title LIKE ? OR product_no LIKE ?)');params.push(`%${p.keyword}%`,`%${p.keyword}%`);}
+  if(p.status){conds.push('status=?');params.push(p.status);}
+  const where='WHERE '+conds.join(' AND ');
+  const fields=`${routeFields},visitor_count,plans_generated_count,order_count,conversion_rate,audit_status,audit_remark`;
+  reply(res,await list(pool,`SELECT ${fields} FROM travel_product ${where}`,`SELECT COUNT(*) total FROM travel_product ${where}`,params,p));
 }));
 api.post('/admin/routes', requirePermission('route:line:add'), run(async(req,res)=>{
   const body=z.object({title:text(100),destination:text(100),default_days:z.number().int().min(1).max(30),style_tag:text(30),base_price_rmb:money}).strict().parse(req.body);
@@ -480,10 +516,97 @@ api.post('/admin/routes', requirePermission('route:line:add'), run(async(req,res
     const no=generateUlid();
     await conn.query(`INSERT INTO travel_product(product_no,agency_id,title,destination,default_days,style_tag,base_price_rmb,status,created_by) VALUES (?,?,?,?,?,?,?,'ON_SALE',?)`,[no,res.locals.user.agency_id,body.title,body.destination,body.default_days,body.style_tag,body.base_price_rmb,res.locals.user.id]);
     const [rows]=await conn.query<RowDataPacket[]>(`SELECT ${routeFields} FROM travel_product WHERE product_no=?`,[no]);
+    await conn.query(
+      `INSERT INTO sys_audit_log
+        (actor_id, action, resource_type, resource_id, request_method, request_path, after_data, trace_id)
+       VALUES (?, 'CREATE', 'ROUTE', ?, ?, ?, ?, ?)`,
+      [res.locals.user.id, String(rows[0].id), req.method, req.originalUrl, JSON.stringify(rows[0]), res.locals.traceId]
+    );
     return {data:rows[0],status:201};
   });
 }));
-api.get('/admin/analytics', requirePermission('order:manage:query'), run(async(_req,res)=>{
-  const [rows]=await pool.query<RowDataPacket[]>(`SELECT COUNT(*) AS order_count,SUM(status='PAID') AS paid_order_count FROM tour_order WHERE product_id IN (SELECT id FROM travel_product WHERE agency_id=?)`,[res.locals.user.agency_id]);
-  reply(res,rows[0]);
+api.patch('/admin/routes/:id', requirePermission('route:line:update'), run(async(req,res)=>{
+  const routeId=id.parse(req.params.id);
+  const body=z.object({
+    title:text(100).optional(),
+    destination:text(100).optional(),
+    default_days:z.number().int().min(1).max(30).optional(),
+    style_tag:text(30).nullable().optional(),
+    base_price_rmb:money.optional(),
+    description:z.string().max(5000).nullable().optional(),
+    status:z.enum(['DRAFT','ON_SALE','OFF_SALE']).optional()
+  }).strict().refine(value=>Object.keys(value).length>0,'至少提供一个待修改字段').parse(req.body);
+  await write(req,res,async conn=>{
+    const [existing]=await conn.query<RowDataPacket[]>(
+      'SELECT * FROM travel_product WHERE id=? AND agency_id=? FOR UPDATE',
+      [routeId,res.locals.user.agency_id]
+    );
+    if(!existing.length) throw new ApiError(404,20016,'线路不存在');
+
+    const columns:Record<string,string> = {
+      title:'title',
+      destination:'destination',
+      default_days:'default_days',
+      style_tag:'style_tag',
+      base_price_rmb:'base_price_rmb',
+      description:'description',
+      status:'status'
+    };
+    const updates=Object.entries(body);
+    await conn.query(
+      `UPDATE travel_product SET ${updates.map(([field])=>`${columns[field]}=?`).join(',')} WHERE id=? AND agency_id=?`,
+      [...updates.map(([,value])=>value),routeId,res.locals.user.agency_id]
+    );
+    const [updated]=await conn.query<RowDataPacket[]>(
+      `SELECT ${routeFields} FROM travel_product WHERE id=? AND agency_id=?`,
+      [routeId,res.locals.user.agency_id]
+    );
+    await conn.query(
+      `INSERT INTO sys_audit_log
+        (actor_id, action, resource_type, resource_id, request_method, request_path, before_data, after_data, trace_id)
+       VALUES (?, 'UPDATE', 'ROUTE', ?, ?, ?, ?, ?, ?)`,
+      [res.locals.user.id, routeId, req.method, req.originalUrl, JSON.stringify(existing[0]), JSON.stringify(updated[0]), res.locals.traceId]
+    );
+    return {data:updated[0]};
+  });
+}));
+api.get('/admin/orders', requirePermission('order:manage:query'), run(async(req,res)=>{
+  const p=page(req.query,['created_at','total_amount'],{status:z.enum(['CREATED','PAID','CANCELED','COMPLETED','REFUNDED']).optional()});
+  const status=({CREATED:'PENDING',CANCELED:'CANCELLED'} as Record<string,string>)[p.status]??p.status;
+  const where=`FROM tour_order WHERE product_id IN (SELECT id FROM travel_product WHERE agency_id=?)${status?' AND status=?':''}`;
+  const result=await list(
+    pool,
+    `SELECT ${orderFields},contact_phone ${where}`,
+    `SELECT COUNT(*) AS total ${where}`,
+    [res.locals.user.agency_id,...(status?[status]:[])],
+    p
+  );
+  reply(res,{
+    ...result,
+    list:result.list.map(row=>{
+      const {contact_phone,...order}=row;
+      return {...order,contact_mobile:maskMobile(contact_phone)};
+    })
+  });
+}));
+api.get('/admin/analytics', requirePermission('order:manage:query'), run(async(req,res)=>{
+  const agencyId=res.locals.user.agency_id;
+  const [orderRows]=await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS order_count,
+            COALESCE(SUM(status='PAID'),0) AS paid_order_count,
+            COALESCE(SUM(status='CANCELLED'),0) AS canceled_order_count,
+            COALESCE(SUM(CASE WHEN status IN ('PAID','COMPLETED') THEN total_amount ELSE 0 END),0) AS revenue_rmb
+       FROM tour_order
+      WHERE product_id IN (SELECT id FROM travel_product WHERE agency_id=?)`,
+    [agencyId]
+  );
+  const [routeRows]=await pool.query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS route_count,
+            COALESCE(SUM(status='ON_SALE'),0) AS on_sale_route_count,
+            COALESCE(SUM(visitor_count),0) AS visitor_count,
+            COALESCE(SUM(plans_generated_count),0) AS plans_generated_count
+       FROM travel_product WHERE agency_id=?`,
+    [agencyId]
+  );
+  reply(res,{...orderRows[0],...routeRows[0]});
 }));

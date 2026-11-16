@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>订单管理 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>订单管理</h1>
+    <p>本社全部订单的查询与确认处理；仅可见本社订单，联系人与手机号脱敏展示。确认处理为幂等写操作（HMAC 签名 + Idempotency-Key）。</p>
+  </div>
+
+  <div class="card">
+    <div class="filters">
+      <div class="field"><label>订单号</label><input type="text" id="f-no" placeholder="订单号"></div>
+      <div class="field"><label>联系人 / 手机</label><input type="text" id="f-kw" placeholder="姓名或脱敏手机号"></div>
+      <div class="field"><label>订单状态</label><select id="f-status">
+        <option value="">全部</option><option value="PENDING">待支付</option><option value="PAID">待确认</option>
+        <option value="CONFIRMED">已确认</option><option value="COMPLETED">已完成</option>
+        <option value="CANCELLED">已取消</option><option value="REFUNDED">已退款</option>
+      </select></div>
+      <div class="field"><label>线路产品</label><select id="f-route"><option value="">全部</option></select></div>
+      <div class="field"><label>出行日期</label><input type="date" id="f-date"></div>
+      <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="btn-search">查询</button></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn btn-outline" type="button" id="btn-export">导出</button>
+      <span class="muted" id="total-hint">—</span>
+    </div>
+    <div class="table-wrap">
+      <table class="grid-table">
+        <colgroup>
+          <col style="width:13%"><col style="width:19%"><col style="width:9%"><col style="width:13%">
+          <col style="width:6%"><col style="width:10%"><col style="width:9%"><col style="width:10%"><col style="width:11%">
+        </colgroup>
+        <thead><tr><th>订单号</th><th>线路产品</th><th>联系人</th><th>联系电话</th><th>人数</th><th>金额</th><th>状态</th><th>出行日期</th><th>操作</th></tr></thead>
+        <tbody id="orders-tbody"></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pager"></div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "agency", active: "orders", title: "订单管理", crumb: "业务管理" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var qs = new URLSearchParams(location.search);
+  var state = {
+    page: 1, size: 10,
+    keyword: "", status: qs.get("status") || "", routeId: "", travelDate: "", orderNo: ""
+  };
+  var routesLoaded = false;
+
+  function loadRoutes() {
+    if (routesLoaded) return;
+    routesLoaded = true;
+    api.call("/admin/routes?page=1&size=100", "GET").then(function (data) {
+      var select = document.getElementById("f-route");
+      (data.list || []).forEach(function (r) {
+        var opt = document.createElement("option");
+        opt.value = r.route_id; opt.textContent = r.title;
+        select.appendChild(opt);
+      });
+    }).catch(function () { /* 下拉失败不阻塞主列表 */ });
+  }
+
+  function fetchList() {
+    return api.call("/admin/orders" + U.query({
+      page: state.page, size: state.size, status: state.status, route_id: state.routeId,
+      travel_date: state.travelDate, keyword: state.keyword
+    }), "GET");
+  }
+
+  function load() {
+    U.loadInto("#orders-tbody", fetchList, function (data) {
+      document.getElementById("total-hint").textContent = "共 " + data.total + " 笔订单";
+      U.fillTbody("#orders-tbody", data.list, function (o) {
+        var actions = '<button class="btn-link" data-act="detail" data-id="' + o.order_id + '">详情</button>';
+        if (o.status === "PAID") {
+          actions += '<button class="btn-link" data-act="confirm" data-id="' + o.order_id + '">确认处理</button>';
+        }
+        return "<tr><td>" + U.esc(o.order_no) + "</td><td>" + U.esc(o.route_title) + "</td>" +
+          "<td>" + U.esc(o.contact_name || "—") + "</td><td>" + U.esc(o.contact_phone || "—") + "</td>" +
+          "<td>" + o.people_count + "</td><td>" + U.money(o.amount) + "</td>" +
+          "<td>" + U.tag("ORDER", o.status) + "</td><td>" + U.date(o.travel_date) + "</td>" +
+          '<td><div class="cell-actions">' + actions + "</div></td></tr>";
+      });
+      U.pagination("#pager", { page: state.page, size: state.size, total: data.total, onPage: function (p) { state.page = p; load(); } });
+      bindRowActions(data.list);
+    });
+  }
+
+  function bindRowActions(rows) {
+    document.querySelectorAll('#orders-tbody [data-act]').forEach(function (btn) {
+      var id = btn.getAttribute("data-id");
+      var row = rows.find(function (r) { return String(r.order_id) === String(id); });
+      if (!row) return;
+      var act = btn.getAttribute("data-act");
+      btn.addEventListener("click", function () {
+        if (act === "detail") showDetail(row.order_id);
+        else if (act === "confirm") confirmOrder(row);
+      });
+    });
+  }
+
+  function confirmOrder(row) {
+    U.formModal({
+      title: "确认处理订单 " + row.order_no,
+      note: "确认后订单状态变为「已确认」，不重复扣库存（锁位阶段已锁定）。重复提交由幂等键兜底。",
+      fields: [{ key: "remark", label: "处理备注", type: "textarea", rows: 2, placeholder: "如：已电话确认出行细节（可选）", span: 2 }],
+      submitLabel: "确认处理",
+      onSubmit: function (values) {
+        return api.call("/admin/orders/" + row.order_id + "/confirm", "POST", { remark: values.remark || undefined },
+          { idempotencyKey: "confirm-" + row.order_id }).then(function () {
+          window.toast("订单已确认");
+          load();
+        });
+      }
+    });
+  }
+
+  function showDetail(orderId) {
+    api.call("/admin/orders/" + orderId, "GET").then(function (o) {
+      var body = '<div class="desc-list">' +
+        item("订单号", o.order_no) + item("线路产品", o.route_title) +
+        item("联系人", o.contact_name || "—") + item("联系电话", o.contact_phone || "—") +
+        item("出行人数", o.people_count + " 人") + item("订单金额", U.money(o.amount)) +
+        item("出行日期", U.date(o.travel_date)) + item("当前状态", U.tag("ORDER", o.status)) +
+        (o.confirm_remark ? item("确认备注", U.esc(o.confirm_remark)) : "") +
+        (o.refund_reason ? item("退款原因", U.esc(o.refund_reason)) : "") +
+        "</div><h3 style='margin:22px 0 10px;font-size:14px'>状态流转</h3><ul class='timeline'>" +
+        (o.timeline || []).map(function (t) {
+          return '<li class="' + (t.done ? "done" : "") + '"><div class="s">' + U.esc(t.step) + '</div><div class="t">' +
+            (t.done && t.time ? U.dateTime(t.time) : U.esc(t.time || "待处理")) + "</div></li>";
+        }).join("") + "</ul>";
+      U.drawer("订单详情", body);
+    }).catch(U.toastError);
+    function item(k, v) { return '<div class="desc-item"><div class="k">' + k + '</div><div class="v">' + v + "</div></div>"; }
+  }
+
+  document.getElementById("btn-search").addEventListener("click", function () {
+    state.page = 1;
+    state.orderNo = document.getElementById("f-no").value.trim();
+    state.keyword = document.getElementById("f-kw").value.trim();
+    state.status = document.getElementById("f-status").value;
+    state.routeId = document.getElementById("f-route").value;
+    state.travelDate = document.getElementById("f-date").value;
+    state.keyword = state.keyword || state.orderNo;
+    load();
+  });
+  document.getElementById("btn-export").addEventListener("click", function () {
+    fetchList().then(function (data) {
+      var rows = data.list || [];
+      if (!rows.length) { window.toast("当前筛选条件下没有可导出的订单"); return; }
+      U.downloadCsv("订单导出", [
+        { label: "订单号", key: "order_no" }, { label: "线路", key: "route_title" },
+        { label: "联系人", key: "contact_name" }, { label: "联系电话", key: "contact_phone" },
+        { label: "人数", key: "people_count" }, { label: "金额", key: "amount" },
+        { label: "出行日期", key: "travel_date" },
+        { label: "状态", value: function (r) { return (U.DICTS.ORDER[r.status] || {}).label || r.status; } },
+        { label: "下单时间", value: function (r) { return U.dateTime(r.created_at); } }
+      ], rows);
+      window.toast("已导出 " + rows.length + " 条订单（脱敏）");
+    }).catch(U.toastError);
+  });
+
+  loadRoutes();
+  load();
+})();
+</script>
+</body>
+</html>

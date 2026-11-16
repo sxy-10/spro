@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite --host",
     "build": "tsc && vite build",
+    "cap:build": "npm run build && npx cap copy",
+    "cap:sync": "npm run build && npx cap sync",
+    "cap:open": "npx cap open android",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>旅游产品管理 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>旅游产品管理</h1>
+    <p>维护本社线路与特产；库存余位以后端返回为准，页面不自行估算。下架为逻辑下架，不做物理删除。</p>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <div class="tab active" data-tab="route">线路管理</div>
+      <div class="tab" data-tab="souvenir">特产管理</div>
+    </div>
+
+    <!-- 线路管理 -->
+    <div class="tab-pane" id="pane-route">
+      <div class="filters">
+        <div class="field"><label>关键词</label><input type="text" id="r-kw" placeholder="标题 / 产品编号"></div>
+        <div class="field"><label>状态</label><select id="r-status">
+          <option value="">全部</option><option value="DRAFT">草稿</option>
+          <option value="ON_SALE">已上架</option><option value="OFF_SALE">已下架</option>
+        </select></div>
+        <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="r-search">查询</button></div>
+      </div>
+      <div class="toolbar">
+        <button class="btn btn-primary" type="button" id="r-new" data-perm="route:line:add">+ 新建线路</button>
+        <button class="btn btn-outline" type="button" id="r-export">导出</button>
+        <span class="muted" id="r-total">—</span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup>
+            <col style="width:19%"><col style="width:11%"><col style="width:6%">
+            <col style="width:10%"><col style="width:9%"><col style="width:6%">
+            <col style="width:5%"><col style="width:5%">
+            <col style="width:7%"><col style="width:13%">
+          </colgroup>
+          <thead>
+            <tr><th>线路标题 / 编号</th><th>目的地</th><th>天数</th><th>风格标签</th><th>基准价</th>
+              <th>访客</th><th>下单</th><th>转化率</th><th>状态</th><th>操作</th></tr>
+          </thead>
+          <tbody id="routes-tbody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="r-pager"></div>
+    </div>
+
+    <!-- 特产管理 -->
+    <div class="tab-pane" id="pane-souvenir" hidden>
+      <div class="filters">
+        <div class="field"><label>关键词</label><input type="text" id="s-kw" placeholder="特产名称 / 编号"></div>
+        <div class="field"><label>分类</label><select id="s-cat">
+          <option value="">全部</option><option>特色食品</option><option>手工艺品</option><option>茶饮</option><option>其他</option>
+        </select></div>
+        <div class="field"><label>状态</label><select id="s-status">
+          <option value="">全部</option><option value="ON_SALE">在售</option><option value="OFF_SALE">下架</option>
+        </select></div>
+        <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="s-search">查询</button></div>
+      </div>
+      <div class="toolbar">
+        <button class="btn btn-primary" type="button" id="s-new" data-perm="route:souvenir:add">+ 新建特产</button>
+        <span class="muted" id="s-total">—</span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:10%"><col style="width:16%"><col style="width:10%"><col style="width:18%"><col style="width:9%"><col style="width:7%"><col style="width:7%"><col style="width:8%"><col style="width:15%"></colgroup>
+          <thead><tr><th>编号</th><th>名称</th><th>分类</th><th>关联线路</th><th>价格</th><th>库存</th><th>销量</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="souvenirs-tbody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="s-pager"></div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "agency", active: "products", title: "旅游产品管理", crumb: "业务管理" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+
+  // Tab 切换
+  document.querySelectorAll(".tab").forEach(function (t) {
+    t.addEventListener("click", function () {
+      document.querySelectorAll(".tab").forEach(function (x) { x.classList.remove("active"); });
+      t.classList.add("active");
+      var key = t.getAttribute("data-tab");
+      document.getElementById("pane-route").hidden = key !== "route";
+      document.getElementById("pane-souvenir").hidden = key !== "souvenir";
+    });
+  });
+
+  // 权限按钮隐藏（体验层；真实门禁在后端 Casbin）
+  document.querySelectorAll("[data-perm]").forEach(function (btn) {
+    if (!api.perm(btn.getAttribute("data-perm"))) btn.style.display = "none";
+  });
+
+  /* ================= 线路 ================= */
+  var rState = { page: 1, size: 10, keyword: "", status: "" };
+
+  function loadRoutes() {
+    U.loadInto("#routes-tbody", function () {
+      return api.call("/admin/routes" + U.query({ page: rState.page, size: rState.size, keyword: rState.keyword, status: rState.status }), "GET");
+    }, function (data) {
+      document.getElementById("r-total").textContent = "共 " + data.total + " 条线路";
+      U.fillTbody("#routes-tbody", data.list, function (p) {
+        var actions = '<button class="btn-link" data-act="stock" data-id="' + p.route_id + '">库存</button>' +
+          '<button class="btn-link" data-act="edit" data-id="' + p.route_id + '">编辑</button>';
+        if (p.status === "ON_SALE") {
+          actions += '<button class="btn-link danger" data-act="off" data-id="' + p.route_id + '">下架</button>';
+        } else {
+          actions += '<button class="btn-link" data-act="on" data-id="' + p.route_id + '">上架</button>';
+        }
+        return "<tr><td>" + U.esc(p.title) + '<div class="muted">' + U.esc(p.product_no) + "</div></td>" +
+          "<td>" + U.esc(p.destination) + "</td><td>" + p.default_days + "</td>" +
+          "<td>" + U.esc(p.style_tag || "—") + "</td><td>" + U.moneyShort(p.base_price_rmb) + "</td>" +
+          "<td>" + p.visitor_count + "</td><td>" + p.order_count + "</td>" +
+          "<td>" + (Number(Number(p.conversion_rate) * 100).toFixed(1)) + "%</td>" +
+          "<td>" + U.tag("PRODUCT", p.status) + (p.audit_status === "PENDING" ? ' <span class="tag tag-warn">待审核</span>' : "") + "</td>" +
+          '<td><div class="cell-actions">' + actions + "</div></td></tr>";
+      });
+      U.pagination("#r-pager", { page: rState.page, size: rState.size, total: data.total, onPage: function (pg) { rState.page = pg; loadRoutes(); } });
+      bindRouteActions(data.list);
+    });
+  }
+
+  function bindRouteActions(rows) {
+    document.querySelectorAll('#routes-tbody [data-act]').forEach(function (btn) {
+      var row = rows.find(function (r) { return String(r.route_id) === String(btn.getAttribute("data-id")); });
+      if (!row) return;
+      var act = btn.getAttribute("data-act");
+      btn.addEventListener("click", function () {
+        if (act === "stock") showStock(row);
+        else if (act === "edit") routeForm(row);
+        else if (act === "off") U.confirmDialog("确定下架「" + row.title + "」？下架为逻辑下架，可随时重新上架。", function (close) {
+          api.call("/admin/routes/" + row.route_id, "PATCH", { status: "OFF_SALE" }).then(function () {
+            close(); window.toast("已下架"); loadRoutes();
+          }).catch(function (err) { close(); U.toastError(err); });
+        });
+        else if (act === "on") api.call("/admin/routes/" + row.route_id, "PATCH", { status: "ON_SALE" })
+          .then(function () { window.toast("已上架"); loadRoutes(); }).catch(U.toastError);
+      });
+    });
+  }
+
+  function routeForm(row) {
+    var isEdit = !!row;
+    U.formModal({
+      title: isEdit ? "编辑线路 · " + row.product_no : "新建线路",
+      note: "新建线路默认上架（基准价必填且大于 0）；库存名额请在列表「库存」中按出行日期设置。",
+      fields: [
+        { key: "title", label: "线路标题", required: true, value: row && row.title, span: 2 },
+        { key: "destination", label: "目的地（可含多城）", required: true, value: row && row.destination },
+        { key: "default_days", label: "默认天数（1-30）", type: "number", required: true, value: row && row.default_days },
+        { key: "style_tag", label: "风格标签", value: row && row.style_tag },
+        { key: "base_price_rmb", label: "基准价（元/人）", type: "number", required: true, value: row && Number(row.base_price_rmb) }
+      ],
+      submitLabel: isEdit ? "保存" : "创建",
+      onSubmit: function (values) {
+        var body = {
+          title: values.title, destination: values.destination,
+          default_days: Number(values.default_days), style_tag: values.style_tag || null,
+          base_price_rmb: Number(values.base_price_rmb).toFixed(2)
+        };
+        var p = isEdit
+          ? api.call("/admin/routes/" + row.route_id, "PATCH", body)
+          : api.call("/admin/routes", "POST", body);
+        return p.then(function () {
+          window.toast(isEdit ? "线路已保存" : "线路已创建并上架");
+          loadRoutes();
+        });
+      }
+    });
+  }
+
+  function showStock(row) {
+    api.call("/admin/routes/" + row.route_id + "/stock", "GET").then(function (data) {
+      var rows = (data.dates || []).map(function (d) {
+        return "<tr><td>" + U.date(d.travel_date) + "</td><td>" + d.total_seats + "</td><td>" +
+          (Number(d.locked_seats) + Number(d.sold_seats)) + "</td><td><b>" + d.available_seats + "</b></td>" +
+          '<td><button class="btn-link" data-date="' + d.travel_date + '" data-total="' + d.total_seats + '">设置名额</button></td></tr>';
+      }).join("");
+      var handle = U.drawer("库存管理 · " + U.esc(data.title || row.title),
+        '<p class="muted" style="margin-top:0">余位只读展示，以后端返回为准；名额设置写入 route_stock，不能低于已占用量。</p>' +
+        '<table class="grid-table"><thead><tr><th>出行日期</th><th>总席位</th><th>已占用</th><th>余位</th><th>操作</th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="5" class="muted" style="text-align:center">该线路尚未配置任何日期库存（不可售）</td></tr>') + "</tbody></table>");
+      handle.body.querySelectorAll("[data-date]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var d = btn.getAttribute("data-date");
+          U.formModal({
+            title: "设置名额 · " + d,
+            fields: [{ key: "total_seats", label: "总席位数", type: "number", required: true, value: btn.getAttribute("data-total") }],
+            submitLabel: "保存",
+            onSubmit: function (values) {
+              return api.call("/admin/routes/" + row.route_id + "/stock", "PUT",
+                { travel_date: d, total_seats: Number(values.total_seats) }).then(function () {
+                window.toast("名额已更新");
+                handle.close();
+                setTimeout(function () { showStock(row); }, 150);
+              });
+            }
+          });
+        });
+      });
+    }).catch(U.toastError);
+  }
+
+  document.getElementById("r-search").addEventListener("click", function () {
+    rState.page = 1;
+    rState.keyword = document.getElementById("r-kw").value.trim();
+    rState.status = document.getElementById("r-status").value;
+    loadRoutes();
+  });
+  document.getElementById("r-new").addEventListener("click", function () { routeForm(null); });
+  document.getElementById("r-export").addEventListener("click", function () {
+    api.call("/admin/routes" + U.query({ page: 1, size: 100, keyword: rState.keyword, status: rState.status }), "GET").then(function (data) {
+      U.downloadCsv("线路导出", [
+        { label: "产品编号", key: "product_no" }, { label: "标题", key: "title" },
+        { label: "目的地", key: "destination" }, { label: "天数", key: "default_days" },
+        { label: "基准价", key: "base_price_rmb" }, { label: "访客", key: "visitor_count" },
+        { label: "下单", key: "order_count" },
+        { label: "状态", value: function (r) { return (U.DICTS.PRODUCT[r.status] || {}).label || r.status; } }
+      ], data.list || []);
+      window.toast("已导出 " + (data.list || []).length + " 条线路");
+    }).catch(U.toastError);
+  });
+
+  /* ================= 特产 ================= */
+  var sState = { page: 1, size: 10, keyword: "", category: "", status: "" };
+
+  function loadSouvenirs() {
+    U.loadInto("#souvenirs-tbody", function () {
+      return api.call("/admin/specialties" + U.query({
+        page: sState.page, size: sState.size, keyword: sState.keyword,
+        category: sState.category, status: sState.status
+      }), "GET");
+    }, function (data) {
+      document.getElementById("s-total").textContent = "共 " + data.total + " 件特产";
+      U.fillTbody("#souvenirs-tbody", data.list, function (s) {
+        var actions = '<button class="btn-link" data-act="s-edit" data-id="' + s.spu_id + '">编辑</button>';
+        if (s.audit_status === "NONE") {
+          actions += '<button class="btn-link" data-act="s-submit" data-id="' + s.spu_id + '">提交审核</button>';
+        }
+        if (s.status === "ON_SALE") {
+          actions += '<button class="btn-link danger" data-act="s-off" data-id="' + s.spu_id + '">下架</button>';
+        } else {
+          actions += '<button class="btn-link" data-act="s-on" data-id="' + s.spu_id + '">上架</button>';
+        }
+        return "<tr><td>" + U.esc(s.product_no) + "</td><td>" + U.esc(s.name) + "</td>" +
+          "<td>" + U.esc(s.category) + "</td><td>" + U.esc(s.link_route_title || "—") + "</td>" +
+          "<td>" + U.moneyShort(s.price) + "</td><td>" + (Number(s.stock) === 0 ? '<span class="tag tag-danger">缺货</span>' : s.stock) + "</td>" +
+          "<td>" + s.sales + "</td><td>" + U.tag("PRODUCT", s.status) +
+          (s.audit_status === "PENDING" ? ' <span class="tag tag-warn">待审核</span>' : "") + "</td>" +
+          '<td><div class="cell-actions">' + actions + "</div></td></tr>";
+      });
+      U.pagination("#s-pager", { page: sState.page, size: sState.size, total: data.total, onPage: function (pg) { sState.page = pg; loadSouvenirs(); } });
+      bindSouvenirActions(data.list);
+    });
+  }
+
+  function bindSouvenirActions(rows) {
+    document.querySelectorAll('#souvenirs-tbody [data-act]').forEach(function (btn) {
+      var row = rows.find(function (r) { return String(r.spu_id) === String(btn.getAttribute("data-id")); });
+      if (!row) return;
+      var act = btn.getAttribute("data-act");
+      btn.addEventListener("click", function () {
+        if (act === "s-edit") souvenirForm(row);
+        else if (act === "s-submit") api.call("/admin/specialties/" + row.spu_id + "/submit", "POST", {})
+          .then(function () { window.toast("已提交平台审核"); loadSouvenirs(); }).catch(U.toastError);
+        else if (act === "s-off") api.call("/admin/specialties/" + row.spu_id, "PATCH", { status: "OFF_SALE" })
+          .then(function () { window.toast("已下架"); loadSouvenirs(); }).catch(U.toastError);
+        else if (act === "s-on") api.call("/admin/specialties/" + row.spu_id, "PATCH", { status: "ON_SALE" })
+          .then(function () { window.toast("已上架"); loadSouvenirs(); }).catch(U.toastError);
+      });
+    });
+  }
+
+  function souvenirForm(row) {
+    var isEdit = !!row;
+    U.formModal({
+      title: isEdit ? "编辑特产 · " + row.product_no : "新建特产",
+      note: "新建特产默认下架态，提交平台审核通过后方可对外展示。",
+      fields: [
+        { key: "name", label: "特产名称", required: true, value: row && row.name },
+        { key: "category", label: "分类", type: "select", options: ["特色食品", "手工艺品", "茶饮", "其他"], value: row && row.category },
+        { key: "price", label: "售价（元）", type: "number", required: true, value: row && Number(row.price) },
+        { key: "stock", label: "库存", type: "number", required: true, value: row && row.stock },
+        { key: "description", label: "图文详情", type: "textarea", span: 2, value: row && row.description }
+      ],
+      submitLabel: isEdit ? "保存" : "创建",
+      onSubmit: function (values) {
+        var body = {
+          name: values.name, category: values.category,
+          price: Number(values.price), stock: Number(values.stock),
+          description: values.description || undefined
+        };
+        var p = isEdit
+          ? api.call("/admin/specialties/" + row.spu_id, "PUT", body)
+          : api.call("/admin/specialties", "POST", body);
+        return p.then(function () {
+          window.toast(isEdit ? "特产已保存" : "特产已创建（下架态，可提交审核）");
+          loadSouvenirs();
+        });
+      }
+    });
+  }
+
+  document.getElementById("s-search").addEventListener("click", function () {
+    sState.page = 1;
+    sState.keyword = document.getElementById("s-kw").value.trim();
+    sState.category = document.getElementById("s-cat").value;
+    sState.status = document.getElementById("s-status").value;
+    loadSouvenirs();
+  });
+  document.getElementById("s-new").addEventListener("click", function () { souvenirForm(null); });
+
+  loadRoutes();
+  loadSouvenirs();
+})();
+</script>
+</body>
+</html>

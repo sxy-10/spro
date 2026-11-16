@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>旅行社管理 · 平台管理后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>旅行社管理</h1>
+    <p>入驻旅行社机构的档案、状态与经营概览；禁用机构后其名下管理员账号将无法登录。数据来自 <code>/platform/agencies</code>。</p>
+  </div>
+
+  <div class="card">
+    <div class="filters">
+      <div class="field"><label>名称 / 许可证号</label><input type="text" id="f-keyword" placeholder="机构名称或许可证号"></div>
+      <div class="field"><label>状态</label>
+        <select id="f-status"><option value="">全部</option><option value="ACTIVE">正常</option><option value="DISABLED">禁用</option></select>
+      </div>
+      <div class="field"><label>&nbsp;</label><button class="btn btn-primary" type="button" id="btn-search">查询</button></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn btn-primary" type="button" id="btn-add">+ 新增旅行社</button>
+    </div>
+    <div class="table-wrap">
+      <table class="grid-table">
+        <colgroup><col style="width:6%"><col style="width:18%"><col style="width:15%"><col style="width:11%"><col style="width:13%"><col style="width:9%"><col style="width:12%"><col style="width:8%"><col style="width:8%"></colgroup>
+        <thead><tr><th>ID</th><th>旅行社名称</th><th>许可证号</th><th>联系人</th><th>联系电话</th><th>状态</th><th>入驻时间</th><th>产品 / 订单</th><th>操作</th></tr></thead>
+        <tbody id="tbody"><tr><td colspan="9" class="muted">加载中…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pager"></div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "platform", active: "agencies", title: "旅行社管理", crumb: "治理与交易" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var state = { page: 1, size: 10, total: 0 };
+  var canUpdate = api.perm("system:agency:update");
+  var canAdd = api.perm("system:agency:add");
+
+  function fetchList() {
+    var params = { page: state.page, size: state.size, keyword: val("#f-keyword"), status: val("#f-status") };
+    return api.call("/platform/agencies" + U.query(params), "GET");
+  }
+  function val(sel) { var el = document.querySelector(sel); return el ? el.value.trim() : ""; }
+
+  function load() {
+    fetchList().then(function (data) {
+      state.total = data.total;
+      U.fillTbody("#tbody", data.list, function (r) {
+        return "<tr><td>" + U.esc(r.agency_id) + "</td><td>" + U.esc(r.agency_name) + "</td><td>" + U.esc(r.license_no) +
+          "</td><td>" + U.esc(r.contact_name || "—") + "</td><td>" + U.esc(r.contact_phone || "—") + "</td>" +
+          "<td>" + U.tag("ACCOUNT", r.status) + "</td><td>" + U.date(r.created_at) + "</td>" +
+          "<td>" + r.onsale_products + " / " + r.order_count + "</td>" +
+          '<td><div class="cell-actions">' +
+          '<button class="btn-link" data-act="detail" data-id="' + r.agency_id + '">详情</button>' +
+          (canUpdate ? '<button class="btn-link" data-act="edit" data-id="' + r.agency_id + '">编辑</button>' : "") +
+          (canUpdate ? '<button class="btn-link ' + (r.status === "ACTIVE" ? "danger" : "") + '" data-act="toggle" data-id="' + r.agency_id + '" data-status="' + r.status + '">' + (r.status === "ACTIVE" ? "禁用" : "启用") + "</button>" : "") +
+          "</div></td></tr>";
+      });
+      U.pagination("#pager", { total: state.total, size: state.size, page: state.page, onPage: function (p) { state.page = p; load(); } });
+    }).catch(U.toastError);
+  }
+
+  // 详情抽屉
+  function openDetail(id) {
+    api.call("/platform/agencies/" + id, "GET").then(function (d) {
+      var html =
+        '<div class="desc-list">' +
+        '<div class="desc-item"><div class="k">机构名称</div><div class="v">' + U.esc(d.agency_name) + "</div></div>" +
+        '<div class="desc-item"><div class="k">许可证号</div><div class="v">' + U.esc(d.license_no) + "</div></div>" +
+        '<div class="desc-item"><div class="k">联系人</div><div class="v">' + U.esc(d.contact_name || "—") + "</div></div>" +
+        '<div class="desc-item"><div class="k">联系电话</div><div class="v">' + U.esc(d.contact_phone || "—") + "</div></div>" +
+        '<div class="desc-item"><div class="k">状态</div><div class="v">' + U.tag("ACCOUNT", d.status) + "</div></div>" +
+        '<div class="desc-item"><div class="k">入驻时间</div><div class="v">' + U.dateTime(d.created_at) + "</div></div>" +
+        '<div class="desc-item"><div class="k">简介</div><div class="v">' + U.esc(d.intro || "—") + "</div></div>" +
+        "</div>" +
+        '<h3 style="margin:22px 0 10px;font-size:14px">旗下管理员</h3>' +
+        '<table class="grid-table"><thead><tr><th>登录名</th><th>昵称</th><th>状态</th><th>最近登录</th></tr></thead><tbody>' +
+        (d.members.map(function (m) {
+          return "<tr><td>" + U.esc(m.username) + "</td><td>" + U.esc(m.nickname || "—") + "</td><td>" +
+            U.tag("ACCOUNT", m.status) + "</td><td>" + U.dateTime(m.last_login_at) + "</td></tr>";
+        }).join("") || '<tr><td colspan="4" class="muted">暂无管理员账号</td></tr>') +
+        "</tbody></table>" +
+        '<h3 style="margin:22px 0 10px;font-size:14px">经营概况</h3>' +
+        '<div class="desc-list">' +
+        '<div class="desc-item"><div class="k">在售产品</div><div class="v">' + d.stats.onsale_products + "</div></div>" +
+        '<div class="desc-item"><div class="k">累计订单</div><div class="v">' + d.stats.order_count + "</div></div>" +
+        '<div class="desc-item"><div class="k">有效交易额</div><div class="v">' + U.money(d.stats.total_amount) + "</div></div>" +
+        "</div>";
+      U.drawer("机构详情 · " + U.esc(d.agency_name), html);
+    }).catch(U.toastError);
+  }
+
+  // 新增 / 编辑
+  function openForm(row) {
+    var isEdit = !!row;
+    U.formModal({
+      title: isEdit ? "编辑机构 · " + row.agency_name : "新增旅行社",
+      note: isEdit ? "修改许可证号后原号将被占用，请谨慎操作。" : "创建后机构初始状态为正常，可在列表中禁用。",
+      fields: [
+        { key: "agency_name", label: "机构名称", required: true, value: row ? row.agency_name : "", placeholder: "如：四川山水行旅行社" },
+        { key: "license_no", label: "许可证号", required: true, value: row ? row.license_no : "", placeholder: "如：L-SC-01234" },
+        { key: "contact_name", label: "联系人", value: row ? row.contact_name : "" },
+        { key: "contact_phone", label: "联系电话", value: row ? row.contact_phone : "" },
+        { key: "intro", label: "机构简介", type: "textarea", span: 2, rows: 3, value: row ? (row.intro || "") : "" }
+      ],
+      submitLabel: isEdit ? "保存修改" : "创建机构",
+      onSubmit: function (values) {
+        var p = isEdit
+          ? api.call("/platform/agencies/" + row.agency_id, "PUT", values)
+          : api.call("/platform/agencies", "POST", values);
+        return p.then(function () { global.toast(isEdit ? "已保存" : "机构已创建"); load(); })
+          .catch(function (err) { throw err; });
+      }
+    });
+  }
+
+  // 启用 / 禁用
+  function toggle(id, status, name) {
+    var toDisable = status === "ACTIVE";
+    U.confirmDialog(
+      (toDisable ? "禁用机构「" : "启用机构「") + name + "」？" +
+      (toDisable ? "该机构名下管理员账号将同步禁用且无法登录。" : "该机构名下管理员账号将恢复登录。"),
+      function (close) {
+        api.call("/platform/agencies/" + id, "PATCH", { status: toDisable ? "DISABLED" : "ACTIVE" })
+          .then(function () { close(); global.toast(toDisable ? "机构已禁用" : "机构已启用"); load(); })
+          .catch(function (err) { U.toastError(err); });
+      }, toDisable);
+  }
+
+  document.getElementById("tbody").addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    var id = btn.getAttribute("data-id");
+    var act = btn.getAttribute("data-act");
+    var row = null;
+    var tr = btn.closest("tr");
+    if (tr) {
+      row = {
+        agency_id: id,
+        agency_name: tr.children[1].textContent,
+        license_no: tr.children[2].textContent,
+        contact_name: tr.children[3].textContent,
+        contact_phone: tr.children[4].textContent,
+        status: btn.getAttribute("data-status")
+      };
+    }
+    if (act === "detail") openDetail(id);
+    else if (act === "edit") { row.intro = ""; openForm(row); }
+    else if (act === "toggle") toggle(id, row.status, row.agency_name);
+  });
+
+  document.getElementById("btn-search").addEventListener("click", function () { state.page = 1; load(); });
+  document.getElementById("f-keyword").addEventListener("keydown", function (e) { if (e.key === "Enter") { state.page = 1; load(); } });
+  document.getElementById("btn-add").addEventListener("click", function () {
+    if (!canAdd) { global.toast("暂无新增机构权限"); return; }
+    openForm(null);
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

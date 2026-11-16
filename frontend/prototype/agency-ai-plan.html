@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 智能规划 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+<style>
+  .chat-log { display: flex; flex-direction: column; gap: 14px; min-height: 300px; max-height: 460px; overflow-y: auto; padding: 4px; }
+  .thinking { color: var(--text-muted); font-size: 13px; padding: 8px 12px; }
+  .parse-tags { margin-top: 8px; }
+  .plan-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>AI 智能规划</h1>
+    <p>一句话需求由服务端解析（<code>POST /admin/plan-drafts</code>），目的地 / 天数 / 预算均由后端识别；方案可保存为线路草稿进入产品管理。</p>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <div class="chat-cols">
+        <!-- 历史会话 -->
+        <div>
+          <button class="btn btn-primary" type="button" style="width:100%" id="new-session">+ 新建会话</button>
+          <ul class="session-list" style="margin-top:12px" id="session-list"><li class="muted">加载中…</li></ul>
+        </div>
+
+        <!-- 对话区 -->
+        <div>
+          <div class="chat-log" id="chat-log">
+            <div class="thinking">输入一句话需求开始策划，例如：「帮我规划云南大理 5 天的线路，预算 6000，2 个人」</div>
+          </div>
+          <div class="filters" style="padding:14px 0 0">
+            <div class="field" style="flex:1">
+              <input type="text" id="chat-input" placeholder="补充偏好，如天数、目的地、人数、预算…" maxlength="500">
+            </div>
+            <button class="btn btn-primary" type="button" id="send-btn">发送</button>
+          </div>
+        </div>
+
+        <!-- 方案预览 -->
+        <div>
+          <div class="card-title" style="margin-bottom:10px">行程草案</div>
+          <div id="plan-meta" class="plan-meta"></div>
+          <ul class="timeline" id="plan-timeline"><li><div class="s">暂无方案</div><div class="t">发送一句话需求后生成</div></li></ul>
+          <div class="filters" style="padding:12px 0 0; flex-direction:column; align-items:stretch">
+            <button class="btn btn-primary" type="button" id="save-draft" data-perm="route:line:add" disabled>保存为线路草稿</button>
+            <button class="btn btn-outline" type="button" id="regen" disabled>重新生成</button>
+            <button class="btn btn-outline" type="button" id="export-plan" disabled>导出行程</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "agency", active: "ai", title: "AI 智能规划", crumb: "经营概览" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var currentPlan = null;     // 当前方案快照（plan_id / days / plan_title…）
+  var lastMessage = "";       // 最近一次需求，用于「重新生成」
+  var busy = false;
+
+  var log = document.getElementById("chat-log");
+  var timeline = document.getElementById("plan-timeline");
+  var planMeta = document.getElementById("plan-meta");
+
+  function addBubble(text, me) {
+    var row = document.createElement("div");
+    row.className = "bubble-row" + (me ? " me" : "");
+    var bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.innerHTML = text;
+    row.appendChild(bubble);
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+    return bubble;
+  }
+  function thinking() {
+    var el = addBubble('<span class="muted">大模型生成中…（DeepSeek 正在编排行程，通常需要 20-40 秒）</span>');
+    return el;
+  }
+
+  function renderPlan(plan) {
+    currentPlan = plan;
+    planMeta.innerHTML = [
+      '<span class="tag tag-info">' + U.esc(plan.plan_title) + "</span>",
+      '<span class="tag tag-muted">预算 ' + U.moneyShort(plan.estimated_total_budget_rmb) + "</span>",
+      plan.ai_meta && plan.ai_meta.provider === "deepseek"
+        ? '<span class="tag tag-success" title="大模型实时生成">DeepSeek · ' + U.esc(plan.ai_meta.model || "") +
+          (plan.ai_meta.latency_ms ? " · " + (Number(plan.ai_meta.latency_ms) / 1000).toFixed(1) + "s" : "") + "</span>"
+        : '<span class="tag tag-muted" title="未启用大模型或调用失败，使用本地模板">模板引擎</span>',
+      plan.is_estimated ? '<span class="tag tag-warn">模拟数据（is_estimated）</span>' : ""
+    ].join(" ");
+    timeline.innerHTML = (plan.days || []).map(function (d) {
+      var stops = [].concat(d.morning_activities || [], d.afternoon_activities || [], d.evening_activities || [])
+        .map(function (a) { return a.attraction_name; }).slice(0, 4).join(" → ");
+      return '<li class="' + (Number(d.day_index) === 1 ? "done" : "") + '">' +
+        '<div class="s">Day ' + d.day_index + " · " + U.esc(d.city_name) + "（" + U.esc(d.theme_title) + "）</div>" +
+        '<div class="t">' + U.esc(stops || "全天自由安排") +
+        (d.accommodation && d.accommodation.hotel_name ? " · 宿：" + U.esc(d.accommodation.hotel_name) : "") + "</div></li>";
+    }).join("");
+    ["save-draft", "regen", "export-plan"].forEach(function (id) { document.getElementById(id).disabled = false; });
+    if (!api.perm("route:line:add")) document.getElementById("save-draft").disabled = true;
+  }
+
+  /* 发送需求（首轮 /admin/plan-drafts；后续迭代走 PATCH /plans/:id） */
+  function send() {
+    if (busy) return;
+    var input = document.getElementById("chat-input");
+    var text = input.value.trim();
+    if (!text) { window.toast("请输入需求内容"); return; }
+    busy = true;
+    document.getElementById("send-btn").disabled = true;
+    input.value = "";
+    addBubble(U.esc(text), true);
+
+    var t = thinking();
+    var p;
+    if (currentPlan) {
+      // 多轮调整：基于当前方案迭代
+      p = api.call("/plans/" + encodeURIComponent(currentPlan.plan_id), "PATCH", { instruction: text })
+        .then(function (plan) { plan.__iter = true; return plan; });
+    } else {
+      lastMessage = text;
+      p = api.call("/admin/plan-drafts", "POST", { message: text });
+    }
+    p.then(function (plan) {
+      t.remove();
+      var parsed = plan.parsed;
+      var head = plan.__iter
+        ? "已按你的补充要求调整方案（版本 v" + plan.version + "），右侧为更新后的草案。"
+        : "已生成「" + U.esc(plan.plan_title) + "」草案。" +
+          (parsed ? '<div class="parse-tags tag-row">' +
+            '<span class="tag tag-info">' + parsed.days + " 天</span>" +
+            '<span class="tag tag-info">' + U.esc(parsed.destination) + "</span>" +
+            '<span class="tag tag-info">预算 ¥' + Number(parsed.budget).toLocaleString() + "</span></div>" : "");
+      addBubble(head + '<div class="tag-row" style="margin-top:8px">' +
+        (plan.days || []).map(function (d) { return '<span class="tag tag-muted">D' + d.day_index + " " + U.esc(d.city_name) + "</span>"; }).join(" ") + "</div>");
+      renderPlan(plan);
+      loadSessions();
+    }).catch(function (err) {
+      t.remove();
+      addBubble('<span style="color:var(--danger)">' + U.esc(err.message || "生成失败") + "</span>");
+    }).finally(function () {
+      busy = false;
+      document.getElementById("send-btn").disabled = false;
+    });
+  }
+
+  /* 左栏：本社策划会话 = 当前账号的行程方案列表 */
+  function loadSessions() {
+    api.call("/plans?page=1&size=10", "GET").then(function (data) {
+      var el = document.getElementById("session-list");
+      el.innerHTML = (data.list || []).map(function (s) {
+        return '<li data-plan="' + U.esc(s.plan_id) + '"' + (currentPlan && currentPlan.plan_id === s.plan_id ? ' class="active"' : "") + ">" +
+          "<div>" + U.esc(s.title) + '</div><div class="st">' + U.date(s.created_at) + "</div></li>";
+      }).join("") || '<li class="muted">暂无历史方案</li>';
+      el.querySelectorAll("[data-plan]").forEach(function (li) {
+        li.addEventListener("click", function () {
+          if (busy) return;
+          var pid = li.getAttribute("data-plan");
+          api.call("/plans/" + encodeURIComponent(pid), "GET").then(function (plan) {
+            currentPlan = plan;
+            renderPlan(plan);
+            addBubble("已载入历史方案（v" + plan.version + "），可直接在下方补充调整要求。");
+          }).catch(U.toastError);
+        });
+      });
+    }).catch(function () {
+      document.getElementById("session-list").innerHTML = '<li class="muted">方案列表加载失败</li>';
+    });
+  }
+
+  document.getElementById("send-btn").addEventListener("click", send);
+  document.getElementById("chat-input").addEventListener("keydown", function (e) { if (e.key === "Enter") send(); });
+
+  document.getElementById("new-session").addEventListener("click", function () {
+    currentPlan = null;
+    planMeta.innerHTML = "";
+    timeline.innerHTML = '<li><div class="s">暂无方案</div><div class="t">发送一句话需求后生成</div></li>';
+    ["save-draft", "regen", "export-plan"].forEach(function (id) { document.getElementById(id).disabled = true; });
+    loadSessions();
+  });
+
+  /* 重新生成：用同一句需求重新走一次服务端解析 */
+  document.getElementById("regen").addEventListener("click", function () {
+    if (!lastMessage) { window.toast("请先发送需求"); return; }
+    currentPlan = null;
+    document.getElementById("chat-input").value = lastMessage;
+    send();
+  });
+
+  /* 保存为线路草稿：写入 travel_product（DRAFT 态），进产品管理继续完善 */
+  document.getElementById("save-draft").addEventListener("click", function () {
+    if (!currentPlan) return;
+    var plan = currentPlan;
+    var dest = (plan.days && plan.days[0] && plan.days[0].city_name) || "待定";
+    var days = (plan.days || []).length;
+    U.formModal({
+      title: "保存为线路草稿",
+      note: "草稿进入「旅游产品管理」，可在那里设置库存、完善信息后上架。",
+      fields: [
+        { key: "title", label: "线路标题", required: true, value: plan.plan_title, span: 2 },
+        { key: "destination", label: "目的地", required: true, value: dest },
+        { key: "default_days", label: "天数", type: "number", required: true, value: days },
+        { key: "base_price_rmb", label: "建议基准价（元/人）", type: "number", required: true,
+          value: Math.max(1, Math.round(Number(plan.estimated_total_budget_rmb) || 0)) },
+        { key: "style_tag", label: "风格标签", value: "AI 策划" }
+      ],
+      submitLabel: "保存草稿",
+      onSubmit: function (values) {
+        return api.call("/admin/routes", "POST", {
+          title: values.title, destination: values.destination,
+          default_days: Number(values.default_days), style_tag: values.style_tag || "AI 策划",
+          base_price_rmb: Number(values.base_price_rmb).toFixed(2)
+        }).then(function () {
+          window.toast("已保存为线路草稿（DRAFT），可在「旅游产品管理」查看");
+          loadSessions();
+        });
+      }
+    });
+  });
+
+  /* 导出行程（Markdown） */
+  document.getElementById("export-plan").addEventListener("click", function () {
+    if (!currentPlan) return;
+    var plan = currentPlan;
+    var md = "# " + plan.plan_title + "\n\n" + (plan.summary_description || "") + "\n\n" +
+      "预算估算：" + U.money(plan.estimated_total_budget_rmb) + "（模拟数据，is_estimated=true）\n\n";
+    (plan.days || []).forEach(function (d) {
+      md += "## Day " + d.day_index + " · " + d.city_name + "：" + d.theme_title + "\n";
+      [["上午", d.morning_activities], ["下午", d.afternoon_activities], ["晚间", d.evening_activities]].forEach(function (seg) {
+        (seg[1] || []).forEach(function (a) {
+          md += "- " + seg[0] + "：" + a.attraction_name +
+            "（建议 " + a.suggested_duration_hours + " 小时，门票 ¥" + a.ticket_price_rmb + "）\n";
+        });
+      });
+      (d.daily_tips || []).forEach(function (tip) { md += "> 提示：" + tip + "\n"; });
+      md += "\n";
+    });
+    var blob = new Blob(["\ufeff" + md], { type: "text/markdown;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (plan.plan_title || "行程草案") + ".md";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    window.toast("已导出 Markdown 行程");
+  });
+
+  loadSessions();
+})();
+</script>
+</body>
+</html>

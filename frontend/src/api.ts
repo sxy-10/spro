@@ -8,6 +8,8 @@
  *   import { loginByAccount } from './lib/auth'; // 认证接口
  */
 import { request as httpRequest } from './lib/http';
+export { sendSeckill, pollSeckillResult } from './lib/http';
+export type { SeckillSubmitResult, SeckillPollResult } from './lib/http';
 import { loginWithPassword } from './lib/auth';
 import { clearSession as clearSessionState, isLoggedIn as hasSession } from './lib/session';
 import type { AuthUser } from './lib/session';

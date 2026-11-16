@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { request } from '../api';
+import { SeckillButton } from './SeckillButton';
 
 interface BookingScreenProps {
   defaultMobile?: string;
+  isLoggedIn?: boolean;
+  onOpenLogin?: () => void;
 }
 
-export function BookingScreen({ defaultMobile = '' }: BookingScreenProps) {
+export function BookingScreen({ defaultMobile = '', isLoggedIn = true, onOpenLogin }: BookingScreenProps) {
+  const [bookingMode, setBookingMode] = useState<'normal' | 'seckill'>('normal');
   const [routes, setRoutes] = useState<any[]>([]);
   const [routeId, setRouteId] = useState('');
   const [date, setDate] = useState('');
@@ -56,6 +60,12 @@ export function BookingScreen({ defaultMobile = '' }: BookingScreenProps) {
   const totalEstimatedPrice = selectedRoute?.base_price_rmb
     ? (Number(selectedRoute.base_price_rmb) * people).toFixed(2)
     : null;
+
+  // 计算秒杀折扣价（3折）
+  const seckillUnitPrice = selectedRoute?.base_price_rmb
+    ? Math.max(99, Math.round(Number(selectedRoute.base_price_rmb) * 0.3))
+    : 199;
+  const totalSeckillPrice = (seckillUnitPrice * people).toFixed(2);
 
   const minDate = new Date().toISOString().split('T')[0];
 
@@ -114,6 +124,38 @@ export function BookingScreen({ defaultMobile = '' }: BookingScreenProps) {
           )
         ) : null}
       </div>
+
+      {/* 预订模式切换 Tab：常规预订 vs 限时秒杀 */}
+      <div className="booking-mode-toggle-bar">
+        <button
+          type="button"
+          className={`mode-toggle-btn ${bookingMode === 'normal' ? 'active' : ''}`}
+          onClick={() => { setBookingMode('normal'); setMessage(null); }}
+        >
+          <span>🎫 常规预订</span>
+        </button>
+        <button
+          type="button"
+          className={`mode-toggle-btn seckill-mode ${bookingMode === 'seckill' ? 'active' : ''}`}
+          onClick={() => { setBookingMode('seckill'); setMessage(null); }}
+        >
+          <span className="flash-flame">⚡</span>
+          <span>限时秒杀专区</span>
+          <span className="badge-discount-mini">3折起</span>
+        </button>
+      </div>
+
+      {bookingMode === 'seckill' && (
+        <div className="seckill-intro-banner">
+          <div className="banner-title-line">
+            <span className="badge-pulsing-red">LIVE</span>
+            <strong>爆款秒杀 · 削峰通道</strong>
+          </div>
+          <p className="banner-desc">
+            采用 Redis Lua 毫秒级原子预扣 + Stream 队列异步建单，高并发不超卖。
+          </p>
+        </div>
+      )}
 
       <form className="booking-form" onSubmit={(e) => { e.preventDefault(); void book(); }}>
         <div className="booking-field">
@@ -183,13 +225,29 @@ export function BookingScreen({ defaultMobile = '' }: BookingScreenProps) {
         </div>
 
         {totalEstimatedPrice && (
-          <div className="booking-summary-banner">
-            <div className="booking-summary-left">
-              <span className="booking-summary-label">预计应付总额</span>
-              <span className="booking-summary-sub">{people} 位旅客 · 包含交通与门票</span>
+          bookingMode === 'normal' ? (
+            <div className="booking-summary-banner">
+              <div className="booking-summary-left">
+                <span className="booking-summary-label">预计应付总额</span>
+                <span className="booking-summary-sub">{people} 位旅客 · 包含交通与门票</span>
+              </div>
+              <span className="booking-summary-price">¥{totalEstimatedPrice}</span>
             </div>
-            <span className="booking-summary-price">¥{totalEstimatedPrice}</span>
-          </div>
+          ) : (
+            <div className="booking-summary-banner seckill-summary">
+              <div className="booking-summary-left">
+                <div className="seckill-price-row">
+                  <span className="booking-summary-label">⚡ 秒杀特惠立减</span>
+                  <span className="original-strike-price">原价 ¥{totalEstimatedPrice}</span>
+                </div>
+                <span className="booking-summary-sub">{people} 位旅客 · 限量 3 折秒杀席位</span>
+              </div>
+              <div className="seckill-final-price-box">
+                <span className="price-currency">¥</span>
+                <span className="seckill-big-price">{totalSeckillPrice}</span>
+              </div>
+            </div>
+          )
         )}
 
         {message && (
@@ -198,9 +256,33 @@ export function BookingScreen({ defaultMobile = '' }: BookingScreenProps) {
           </div>
         )}
 
-        <button className="booking-submit-button" disabled={!isSubmittable} type="submit">
-          {busy ? '正在锁定名额…' : '立即提交预订'}
-        </button>
+        {bookingMode === 'normal' ? (
+          <button className="booking-submit-button" disabled={!isSubmittable} type="submit">
+            {busy ? '正在锁定名额…' : '立即提交预订'}
+          </button>
+        ) : (
+          <SeckillButton
+            routeId={routeId}
+            travelDate={date}
+            peopleCount={people}
+            isLoggedIn={isLoggedIn}
+            onOpenLogin={onOpenLogin}
+            disabled={!routeId || !date || people < 1}
+            priceText={`¥${seckillUnitPrice}`}
+            onSuccess={(orderId) => {
+              setMessage({
+                type: 'success',
+                text: `🎉 秒杀成功！订单 #${orderId} 已由 Redis 削峰队列落库生成，请尽快完成支付！`
+              });
+            }}
+            onError={(err) => {
+              setMessage({ type: 'error', text: err });
+            }}
+            onSoldOut={() => {
+              setMessage({ type: 'error', text: '⚡ 该路线在所选日期的秒杀名额已售罄 (Sold Out)！' });
+            }}
+          />
+        )}
       </form>
     </div>
   );

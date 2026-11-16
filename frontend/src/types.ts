@@ -53,12 +53,19 @@ export interface ExploreMapPin {
   cityName: string;
   topPercent: number;
   leftPercent: number;
+  category?: 'nature' | 'culture' | 'food' | 'city';
+  description?: string;
+  tags?: string[];
+  region?: string;
 }
 
 export interface ExploreCollectionItem {
   id: string;
   title: string;
   detailMeta: string;
+  description?: string;
+  tags?: string[];
+  routePrompt?: string;
 }
 
 export interface AdminPersonaRule {
@@ -81,4 +88,41 @@ export interface AdminMetricsData {
   conversionRateDiffPercent: number;
   personas: AdminPersonaRule[];
   routes: AdminProductRoute[];
+}
+
+export interface ProfileFavoriteItem {
+  id: string;
+  title: string;
+  category: '路线' | '景点' | '美食';
+  description: string;
+  badgeText: string;
+  planPrompt: string;
+}
+
+export interface ProfileSubscriptionItem {
+  id: string;
+  title: string;
+  description: string;
+  frequency: string;
+  enabled: boolean;
+  checkPrompt: string;
+}
+
+export interface ProfileFootprintItem {
+  id: string;
+  cityName: string;
+  provinceName: string;
+  yearString: string;
+  countryCode: string;
+  description: string;
+}
+
+export interface ProfileCollectionPassItem {
+  id: string;
+  title: string;
+  passType: string;
+  issueDate: string;
+  serialNumber: string;
+  statusText: string;
+  highlight: string;
 }

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>财务与结算 · 平台管理后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>财务与结算</h1>
+    <p>平台交易总额、旅行社结算与退款记录；确认结算为幂等写操作并记录审计日志。数据来自 <code>/platform/finance/*</code>。</p>
+  </div>
+
+  <div id="finance-body">
+    <div class="kpi-grid" id="kpi-grid"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">旅行社结算单</div>
+        <div class="card-actions">
+          <select id="s-status" style="max-width:140px">
+            <option value="">全部状态</option><option value="PENDING">待结算</option>
+            <option value="SETTLED">已结算</option><option value="REJECTED">已驳回</option>
+          </select>
+          <button class="btn btn-outline btn-sm" type="button" id="btn-export">导出</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:13%"><col style="width:19%"><col style="width:13%"><col style="width:9%"><col style="width:12%"><col style="width:11%"><col style="width:12%"><col style="width:11%"></colgroup>
+          <thead><tr><th>结算单号</th><th>旅行社</th><th>结算周期</th><th>订单笔数</th><th>应收金额</th><th>平台佣金</th><th>应付金额</th><th>状态 / 操作</th></tr></thead>
+          <tbody id="s-tbody"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="s-pager"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="card-title">退款记录</div></div>
+      <div class="table-wrap">
+        <table class="grid-table">
+          <colgroup><col style="width:14%"><col style="width:16%"><col style="width:18%"><col style="width:12%"><col style="width:22%"><col style="width:18%"></colgroup>
+          <thead><tr><th>订单号</th><th>客户</th><th>所属旅行社</th><th>退款金额</th><th>退款原因</th><th>状态 / 时间</th></tr></thead>
+          <tbody id="r-tbody"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "platform", active: "finance", title: "财务与结算", crumb: "治理与交易" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var state = { page: 1, size: 10, total: 0 };
+  var canSettle = api.perm("finance:platform:settle");
+  var lastList = [];
+
+  function loadKpi() {
+    return api.call("/platform/finance/summary", "GET").then(function (k) {
+      document.getElementById("kpi-grid").innerHTML = [
+        { label: "平台总交易额", num: U.moneyShort(k.total_gmv), sub: "已支付口径", cls: "up" },
+        { label: "待结算金额", num: U.moneyShort(k.pending_settle), sub: k.pending_agencies + " 家旅行社", cls: "" },
+        { label: "已结算金额", num: U.moneyShort(k.settled_amount), sub: "累计应付已结", cls: "up" },
+        { label: "退款总额", num: U.moneyShort(k.refund_amount), sub: k.refund_count + " 笔退款", cls: Number(k.refund_amount) > 0 ? "down" : "" }
+      ].map(function (item) {
+        return '<div class="kpi-card"><div class="kpi-label">' + U.esc(item.label) + '</div>' +
+          '<div class="kpi-num">' + U.esc(item.num) + '</div>' +
+          '<div class="kpi-sub ' + item.cls + '">' + U.esc(item.sub) + "</div></div>";
+      }).join("");
+    });
+  }
+
+  function loadSettlements() {
+    var params = { page: state.page, size: state.size, status: document.getElementById("s-status").value };
+    return api.call("/platform/settlements" + U.query(params), "GET").then(function (data) {
+      state.total = data.total;
+      lastList = data.list;
+      U.fillTbody("#s-tbody", data.list, function (r) {
+        var ops = '<div class="cell-actions"><button class="btn-link" data-act="detail" data-i="' + r.settlement_id + '">明细</button>';
+        if (r.status === "PENDING" && canSettle) {
+          ops += '<button class="btn-link" data-act="confirm" data-i="' + r.settlement_id + '">确认结算</button>';
+        }
+        if (r.status === "REJECTED" && r.reject_reason) {
+          ops += '<button class="btn-link danger" data-act="reason" data-i="' + r.settlement_id + '">原因</button>';
+        }
+        ops += "</div>";
+        return "<tr><td>" + U.esc(r.settlement_no) + "</td><td>" + U.esc(r.agency_name) + "</td><td>" + U.esc(r.period_label) + "</td>" +
+          "<td>" + r.order_count + "</td><td>" + U.money(r.gross_amount) + "</td>" +
+          "<td>" + U.money(r.commission_amount) + ' <span class="muted">(' + Number(r.commission_rate) + "%)</span></td>" +
+          "<td><b>" + U.money(r.payable_amount) + "</b></td>" +
+          "<td>" + U.tag("SETTLE", r.status) + ops + "</td></tr>";
+      });
+      U.pagination("#s-pager", { total: state.total, size: state.size, page: state.page, onPage: function (p) { state.page = p; loadSettlements(); } });
+    });
+  }
+
+  function loadRefunds() {
+    return api.call("/platform/refunds", "GET").then(function (data) {
+      U.fillTbody("#r-tbody", data.list, function (r) {
+        return "<tr><td>" + U.esc(r.order_no) + "</td><td>" + U.esc(r.customer || "—") + " · " + U.esc(r.masked_phone || "—") + "</td>" +
+          "<td>" + U.esc(r.agency_name) + "</td><td>" + U.money(r.amount) + "</td>" +
+          "<td>" + U.esc(r.refund_reason || "—") + "</td>" +
+          "<td>" + U.tag("ORDER", r.status) + '<div class="muted">' + U.dateTime(r.refunded_at) + " 处理完成</div></td></tr>";
+      });
+    });
+  }
+
+  function findSettlement(id) {
+    for (var i = 0; i < lastList.length; i++) if (String(lastList[i].settlement_id) === String(id)) return lastList[i];
+    return null;
+  }
+
+  function openDetail(id) {
+    var r = findSettlement(id);
+    if (!r) return;
+    U.drawer("结算单明细 · " + U.esc(r.settlement_no),
+      '<div class="desc-list">' +
+      '<div class="desc-item"><div class="k">结算单号</div><div class="v">' + U.esc(r.settlement_no) + "</div></div>" +
+      '<div class="desc-item"><div class="k">旅行社</div><div class="v">' + U.esc(r.agency_name) + "</div></div>" +
+      '<div class="desc-item"><div class="k">结算周期</div><div class="v">' + U.esc(r.period_label) + "</div></div>" +
+      '<div class="desc-item"><div class="k">订单笔数</div><div class="v">' + r.order_count + "</div></div>" +
+      '<div class="desc-item"><div class="k">应收金额（毛额）</div><div class="v">' + U.money(r.gross_amount) + "</div></div>" +
+      '<div class="desc-item"><div class="k">佣金比例</div><div class="v">' + Number(r.commission_rate) + "%</div></div>" +
+      '<div class="desc-item"><div class="k">平台佣金</div><div class="v">' + U.money(r.commission_amount) + "</div></div>" +
+      '<div class="desc-item"><div class="k">应付旅行社</div><div class="v"><b>' + U.money(r.payable_amount) + "</b></div></div>" +
+      '<div class="desc-item"><div class="k">状态</div><div class="v">' + U.tag("SETTLE", r.status) + "</div></div>" +
+      '<div class="desc-item"><div class="k">生成时间</div><div class="v">' + U.dateTime(r.created_at) + "</div></div>" +
+      '<div class="desc-item"><div class="k">结算时间</div><div class="v">' + U.dateTime(r.settled_at) + "</div></div>" +
+      (r.reject_reason ? '<div class="desc-item"><div class="k">驳回原因</div><div class="v">' + U.esc(r.reject_reason) + "</div></div>" : "") +
+      "</div>");
+  }
+
+  function confirmSettle(id) {
+    var r = findSettlement(id);
+    if (!r) return;
+    U.confirmDialog(
+      "确认结算单「" + r.settlement_no + "」？应向 " + r.agency_name + " 支付 " + U.money(r.payable_amount) +
+      "（佣金 " + U.money(r.commission_amount) + "）。确认后进入已结算状态并写审计日志。",
+      function (close) {
+        api.call("/platform/settlements/" + id + "/confirm", "POST", {})
+          .then(function () { close(); global.toast("结算完成"); loadKpi(); loadSettlements(); })
+          .catch(function (err) { U.toastError(err); });
+      });
+  }
+
+  document.getElementById("s-tbody").addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    var id = btn.getAttribute("data-i");
+    var act = btn.getAttribute("data-act");
+    if (act === "detail") openDetail(id);
+    else if (act === "confirm") confirmSettle(id);
+    else if (act === "reason") {
+      var r = findSettlement(id);
+      global.toast(r && r.reject_reason ? "驳回原因：" + r.reject_reason : "未记录驳回原因");
+    }
+  });
+  document.getElementById("s-status").addEventListener("change", function () { state.page = 1; loadSettlements().catch(U.toastError); });
+  document.getElementById("btn-export").addEventListener("click", function () {
+    U.downloadCsv("结算单.csv", [
+      { label: "结算单号", key: "settlement_no" }, { label: "旅行社", key: "agency_name" },
+      { label: "结算周期", key: "period_label" }, { label: "订单笔数", key: "order_count" },
+      { label: "应收金额", key: "gross_amount" }, { label: "佣金比例", key: "commission_rate" },
+      { label: "平台佣金", key: "commission_amount" }, { label: "应付金额", key: "payable_amount" },
+      { label: "状态", key: "status" }, { label: "结算时间", key: "settled_at" }
+    ], lastList);
+  });
+
+  U.loadInto("#finance-body", function () {
+    return Promise.all([loadKpi(), loadSettlements(), loadRefunds()]);
+  }, function () { /* 各分区已各自渲染 */ });
+})();
+</script>
+</body>
+</html>

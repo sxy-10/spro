@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 智能服务管理 · 平台管理后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>AI 智能服务管理</h1>
+    <p>监控智能体运行质量与工具调用情况；人设、模型参数与工具开关来自 <code>/platform/ai-service</code> 真实配置。</p>
+  </div>
+
+  <div id="ai-body">
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <div class="card-title">大模型接入状态</div>
+        <div class="card-actions"><button class="btn btn-outline btn-sm" type="button" id="btn-llm-test">测试连接</button></div>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px" id="llm-meta">
+          <div><div class="muted" style="font-size:12px">服务商</div><div id="llm-provider" style="font-weight:600">—</div></div>
+          <div><div class="muted" style="font-size:12px">模型</div><div id="llm-model" style="font-weight:600">—</div></div>
+          <div><div class="muted" style="font-size:12px">接口地址</div><div id="llm-base" style="font-size:12px;word-break:break-all">—</div></div>
+          <div><div class="muted" style="font-size:12px">密钥状态</div><div id="llm-key">—</div></div>
+        </div>
+        <div class="muted" style="margin-top:10px;font-size:12px" id="llm-test-result">
+          密钥仅由后端从环境变量 DEEPSEEK_API_KEY 读取，不会下发到前端、也不写入数据库。
+        </div>
+      </div>
+    </div>
+
+    <div class="kpi-grid" id="kpi-grid"></div>
+
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><div class="card-title">工具调用分布</div></div>
+        <div class="card-body" id="tool-dist"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">热门咨询问题</div></div>
+        <div class="card-body"><ul class="feed-list" id="hot-questions"></ul></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><div class="card-title">异常 / 未闭环会话</div></div>
+        <div class="table-wrap" style="padding-top:0">
+          <table class="grid-table">
+            <thead><tr><th>会话</th><th>会话标题</th><th>最后活跃</th><th>状态</th></tr></thead>
+            <tbody id="abnormal-tbody"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">服务配置</div></div>
+        <div class="card-body">
+          <div class="desc-list" id="config-meta">
+            <div class="desc-item"><div class="k">最近更新</div><div class="v" id="cfg-updated">—</div></div>
+          </div>
+          <div class="filters" style="flex-direction:column;align-items:flex-start;gap:12px;margin-top:12px">
+            <div class="field" style="width:100%"><label>智能体人设</label><textarea id="cfg-persona" rows="3" placeholder="travel-agent 人设与提示词"></textarea></div>
+            <div class="field" style="width:100%"><label>模型参数</label><input type="text" id="cfg-params" placeholder="如：温度 0.7 · 最大长度 2048"></div>
+            <div class="grid-2" style="gap:8px;width:100%">
+              <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="tool-attractions"> 景点工具</label>
+              <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="tool-transport"> 交通工具</label>
+              <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="tool-hotel"> 酒店工具</label>
+              <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="tool-food"> 餐饮工具</label>
+              <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="tool-weather"> 天气工具</label>
+            </div>
+          </div>
+          <div class="toolbar" style="padding:12px 0 0"><button class="btn btn-primary" type="button" id="btn-save-config">保存配置</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "platform", active: "ai-service", title: "AI 智能服务管理", crumb: "平台配置" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var TOOL_NAMES = {
+    attractions: "景点查询", transport: "交通查询", hotel: "酒店查询", food: "餐饮查询", weather: "天气查询"
+  };
+  var canConfig = api.perm("ai:service:config");
+
+  function render(data) {
+    var k = data.kpi;
+    var successCalls = data.tool_distribution.reduce(function (s, t) { return s + Number(t.success_calls); }, 0);
+    var totalCalls = data.tool_distribution.reduce(function (s, t) { return s + Number(t.calls); }, 0);
+    var successRate = totalCalls ? (successCalls / totalCalls * 100).toFixed(1) + "%" : "—";
+    document.getElementById("kpi-grid").innerHTML = [
+      { label: "今日会话数", num: k.today_sessions, sub: "活跃会话 " + k.active_sessions, cls: "" },
+      { label: "今日消息数", num: k.today_messages, sub: "用户与智能体消息累计", cls: "" },
+      { label: "今日工具调用", num: k.today_tool_calls, sub: "成功率 " + successRate + " · 均耗 " + (Number(k.avg_latency_ms) / 1000).toFixed(2) + "s", cls: "up" },
+      { label: "未闭环会话", num: k.unclosed_sessions, sub: "超 24 小时未继续", cls: k.unclosed_sessions > 0 ? "down" : "" }
+    ].map(function (item) {
+      return '<div class="kpi-card"><div class="kpi-label">' + U.esc(item.label) + '</div>' +
+        '<div class="kpi-num">' + U.esc(item.num) + '</div>' +
+        '<div class="kpi-sub ' + item.cls + '">' + U.esc(item.sub) + "</div></div>";
+    }).join("");
+
+    U.bars(document.getElementById("tool-dist"), data.tool_distribution.map(function (t) {
+      return { label: t.tool_name, value: Number(t.calls), display: t.calls + "（失败 " + Number(t.failed_calls) + "）" };
+    }));
+
+    document.getElementById("hot-questions").innerHTML = data.hot_questions.map(function (q) {
+      var text = String(q.content || "");
+      var short = text.length > 40 ? text.slice(0, 40) + "…" : text;
+      return "<li><div>" + U.esc(short) + '</div><span class="meta">' + q.cnt + " 次</span></li>";
+    }).join("") || '<li><div class="muted">暂无咨询数据</div></li>';
+
+    document.getElementById("abnormal-tbody").innerHTML = data.abnormal_sessions.map(function (s) {
+      var abnormal = s.status === "ACTIVE";
+      return "<tr><td>CS-" + U.esc(s.session_id) + "</td><td>" + U.esc(s.title || "未命名会话") + "</td>" +
+        "<td>" + U.dateTime(s.last_active_at) + "</td>" +
+        "<td>" + (abnormal ? '<span class="tag tag-warn">未闭环</span>' : '<span class="tag tag-danger">异常</span>') + "</td></tr>";
+    }).join("") || '<tr><td colspan="4" class="muted">暂无异常会话</td></tr>';
+
+    // 配置区
+    var cfg = data.config || {};
+    document.getElementById("cfg-updated").textContent = U.dateTime(cfg.updated_at);
+    document.getElementById("cfg-persona").value = cfg.persona || "";
+    document.getElementById("cfg-params").value = cfg.model_params || "";
+    var tools = {};
+    try { tools = typeof cfg.tools_json === "string" ? JSON.parse(cfg.tools_json) : (cfg.tools_json || {}); } catch (e) { tools = {}; }
+    Object.keys(TOOL_NAMES).forEach(function (key) {
+      var box = document.getElementById("tool-" + key);
+      if (box) box.checked = tools[key] !== false; // 未配置默认开启
+    });
+    if (!canConfig) {
+      ["cfg-persona", "cfg-params"].forEach(function (id) { document.getElementById(id).disabled = true; });
+      document.getElementById("btn-save-config").disabled = true;
+      document.getElementById("btn-save-config").textContent = "无配置权限";
+    }
+
+    // 大模型接入状态
+    var llm = data.llm || {};
+    var providerName = llm.provider === "deepseek" ? "DeepSeek" : (llm.provider || "未接入");
+    document.getElementById("llm-provider").textContent = providerName;
+    document.getElementById("llm-model").textContent = llm.model || "—";
+    document.getElementById("llm-base").textContent = llm.base_url || "—";
+    document.getElementById("llm-key").innerHTML = llm.key_configured
+      ? '<span class="tag tag-success">已配置（环境变量）</span>'
+      : '<span class="tag tag-danger">未配置 DEEPSEEK_API_KEY</span>';
+    if (!llm.enabled) {
+      document.getElementById("llm-test-result").innerHTML =
+        '<span class="tag tag-warn">当前使用本地模板引擎</span> 未检测到可用密钥，行程生成会回退模板；配置环境变量后重启后端即可启用。';
+    }
+  }
+
+  document.getElementById("btn-llm-test").addEventListener("click", function (e) {
+    var btn = e.target;
+    btn.disabled = true;
+    btn.textContent = "测试中…";
+    var out = document.getElementById("llm-test-result");
+    out.textContent = "正在向模型发起一次真实请求…";
+    api.call("/platform/ai-service/test", "POST", {}).then(function (r) {
+      out.innerHTML = '<span class="tag tag-success">连接正常</span> ' + U.esc(r.model) +
+        " · 往返 " + r.latency_ms + "ms" + (r.tokens ? " · " + r.tokens + " tokens" : "") +
+        '<div class="muted" style="margin-top:6px;font-size:12px">模型回复：' + U.esc(String(r.reply || "")) + "</div>";
+      global.toast("大模型连接正常");
+    }).catch(function (err) {
+      out.innerHTML = '<span class="tag tag-danger">连接失败</span> ' + U.esc(err.message || "未知错误");
+      U.toastError(err);
+    }).then(function () {
+      btn.disabled = false;
+      btn.textContent = "测试连接";
+    });
+  });
+
+  document.getElementById("btn-save-config").addEventListener("click", function (e) {
+    var btn = e.target;
+    btn.disabled = true;
+    var tools = {};
+    Object.keys(TOOL_NAMES).forEach(function (key) {
+      var box = document.getElementById("tool-" + key);
+      if (box) tools[key] = box.checked;
+    });
+    api.call("/platform/ai-service/config", "PUT", {
+      persona: document.getElementById("cfg-persona").value.trim() || undefined,
+      model_params: document.getElementById("cfg-params").value.trim() || undefined,
+      tools: tools
+    }).then(function () {
+      global.toast("AI 服务配置已保存");
+      btn.disabled = false;
+    }).catch(function (err) { btn.disabled = false; U.toastError(err); });
+  });
+
+  U.loadInto("#ai-body", function () { return api.call("/platform/ai-service", "GET"); }, render);
+})();
+</script>
+</body>
+</html>

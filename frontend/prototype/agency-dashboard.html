@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>旅行社工作台 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>旅行社工作台</h1>
+    <p>欢迎回来，这里是本社经营概况、待办事项与热门产品一览。数据来自 <code>/admin/dashboard</code> 实时接口。</p>
+  </div>
+
+  <div id="dashboard-body">
+    <!-- KPI 卡片 -->
+    <div class="kpi-grid" id="kpi-grid"></div>
+
+    <div class="split">
+      <!-- 经营趋势 -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">经营趋势</div>
+          <div class="card-actions">
+            <button class="btn btn-sm" type="button" data-range="7">7 天</button>
+            <button class="btn btn-sm btn-primary" type="button" data-range="14">14 天</button>
+          </div>
+        </div>
+        <div class="card-body" id="trend-body"></div>
+      </div>
+
+      <!-- 待办事项 -->
+      <div class="card">
+        <div class="card-head"><div class="card-title">待办事项</div></div>
+        <div class="card-body"><ul class="todo-list" id="todo-list"></ul></div>
+      </div>
+    </div>
+
+    <div class="split">
+      <!-- 热门产品 -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">热门线路 TOP5（按转化率）</div>
+          <div class="card-actions"><a class="btn-link" href="agency-products.html">全部产品</a></div>
+        </div>
+        <div class="card-body" id="top-products"></div>
+      </div>
+
+      <!-- 最近动态 -->
+      <div class="card">
+        <div class="card-head"><div class="card-title">最近订单</div></div>
+        <div class="card-body"><ul class="feed-list" id="recent-orders"></ul></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+AdminLayout.mount({ role: "agency", active: "dashboard", title: "旅行社工作台", crumb: "经营概览" });
+
+(function () {
+  var api = window.WebApi, U = window.UI;
+  var trendRange = 14;
+  var lastData = null;
+
+  function render() {
+    if (!lastData) return;
+    var k = lastData.kpi;
+    document.getElementById("kpi-grid").innerHTML = [
+      { label: "在售线路数", num: k.onsale_count, sub: "草稿 " + k.draft_count + " 条待完善", cls: "" },
+      { label: "今日新增订单", num: k.today_orders, sub: "今日成交 " + U.moneyShort(k.today_amount), cls: "up" },
+      { label: "待确认订单", num: k.pending_confirms, sub: "需今日处理", cls: k.pending_confirms > 0 ? "down" : "" },
+      { label: "成单转化率", num: k.conversion_rate + "%", sub: "下单数 / 访客数", cls: "up" }
+    ].map(function (item) {
+      return '<div class="kpi-card"><div class="kpi-label">' + U.esc(item.label) + '</div>' +
+        '<div class="kpi-num">' + U.esc(item.num) + '</div>' +
+        '<div class="kpi-sub ' + item.cls + '">' + U.esc(item.sub) + "</div></div>";
+    }).join("");
+
+    // 趋势（近 N 天，后端返回 14 天，前端按范围截取）
+    var trend = lastData.trend.slice(-trendRange);
+    U.lineChart(document.getElementById("trend-body"), [
+      { label: "访客数", color: "#378044", data: trend.map(function (r) { return Number(r.visits); }) },
+      { label: "生成行程数", color: "#7fb98a", data: trend.map(function (r) { return Number(r.plans); }) },
+      { label: "下单数", color: "#d98a1f", data: trend.map(function (r) { return Number(r.orders); }) }
+    ], trend.map(function (r) { return String(r.day).slice(5); }));
+
+    // 待办
+    var todos = [];
+    lastData.todos.pending_orders.forEach(function (o) {
+      todos.push('<li><span class="tag tag-warn">待确认</span>' +
+        "<div>订单 " + U.esc(o.order_no) + " · " + U.esc(o.route_title) +
+        '<div class="muted">' + o.people_count + " 人 · " + U.money(o.amount) + " · " + U.dateTime(o.created_at) + "</div></div>" +
+        '<a class="btn-link" href="agency-orders.html?status=PAID">处理</a></li>');
+    });
+    lastData.todos.low_stock.forEach(function (s) {
+      todos.push('<li><span class="tag tag-danger">库存紧张</span>' +
+        "<div>「" + U.esc(s.title) + "」" + U.date(s.travel_date) + " 余位 " + s.available_seats + " 席" +
+        '<div class="muted">总席位 ' + s.total_seats + "</div></div>" +
+        '<a class="btn-link" href="agency-products.html">查看</a></li>');
+    });
+    if (lastData.kpi.draft_count > 0) {
+      todos.push('<li><span class="tag tag-muted">草稿</span>' +
+        "<div>" + lastData.kpi.draft_count + " 条线路待完善上架" +
+        '<div class="muted">缺少封面或行程明细</div></div>' +
+        '<a class="btn-link" href="agency-products.html">去完善</a></li>');
+    }
+    document.getElementById("todo-list").innerHTML =
+      todos.length ? todos.join("") : '<li><span class="tag tag-success">清空</span><div>暂无待办事项</div></li>';
+
+    // 热门产品
+    document.getElementById("top-products").innerHTML = lastData.top_products.map(function (p, i) {
+      var thumb = (p.destination || p.title).slice(0, 2);
+      return '<div class="product-mini">' +
+        '<div class="product-thumb">' + U.esc(thumb) + "</div>" +
+        '<div class="info"><div class="t">' + U.esc(p.title) + "</div>" +
+        '<div class="d">' + U.esc(p.destination) + " · " + U.esc(p.style_tag || "—") + " · " + U.moneyShort(p.base_price_rmb) + "/人</div></div>" +
+        '<div class="right"><div class="muted">转化率</div><b>' + Number(Number(p.conversion_rate) * 100).toFixed(1) + "%</b></div></div>";
+    }).join("") || '<div class="muted">暂无在售线路</div>';
+
+    // 最近订单
+    document.getElementById("recent-orders").innerHTML = lastData.recent_orders.map(function (o) {
+      return "<li>" + U.tag("ORDER", o.status) +
+        "<div>" + U.esc(o.contact_name || "游客") + " 预订 " + U.esc(o.route_title) +
+        '<div class="muted">' + o.people_count + " 人 · " + U.money(o.amount) + "</div></div>" +
+        '<span class="meta">' + U.dateTime(o.created_at) + "</span></li>";
+    }).join("") || '<li><div class="muted">暂无订单</div></li>';
+  }
+
+  document.querySelectorAll("[data-range]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      trendRange = Number(btn.getAttribute("data-range"));
+      document.querySelectorAll("[data-range]").forEach(function (b) { b.classList.remove("btn-primary"); });
+      btn.classList.add("btn-primary");
+      render();
+    });
+  });
+
+  U.loadInto("#dashboard-body", function () { return api.call("/admin/dashboard", "GET"); }, function (data) {
+    lastData = data; render();
+  });
+})();
+</script>
+</body>
+</html>

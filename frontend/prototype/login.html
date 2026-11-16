@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 旅游规划智能体 Web 端</title>
+<link rel="stylesheet" href="assets/common.css">
+<style>
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .login-card {
+    display: grid; grid-template-columns: 1fr 1fr; width: min(860px, calc(100vw - 48px));
+    background: var(--card); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 20px 60px rgba(22, 60, 30, 0.14); border: 1px solid var(--border);
+  }
+  .login-brand {
+    background: linear-gradient(150deg, var(--brand-dark) 0%, var(--brand) 62%, var(--accent) 100%);
+    color: #e7f4ea; padding: 44px 38px; display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .login-brand .logo { display: flex; align-items: center; gap: 10px; }
+  .login-brand .logo .brand-logo { width: 40px; height: 40px; font-size: 18px; }
+  .login-brand .logo .t { font-size: 18px; font-weight: 700; color: #fff; }
+  .login-brand h2 { font-size: 22px; color: #fff; margin: 18px 0 10px; line-height: 1.4; }
+  .login-brand p { font-size: 13px; color: #bcd9c6; margin: 0; line-height: 1.8; }
+  .login-brand ul { list-style: none; padding: 0; margin: 18px 0 0; font-size: 13px; color: #dcebe0; }
+  .login-brand li { padding: 4px 0; }
+  .login-form { padding: 44px 38px; }
+  .login-form h1 { font-size: 20px; margin: 0 0 6px; }
+  .login-form .sub { color: var(--text-2); font-size: 13px; margin-bottom: 26px; }
+  .login-form .field { margin-bottom: 16px; }
+  .login-form .field input, .login-form .field select { width: 100%; }
+  .captcha-row { display: flex; gap: 10px; align-items: stretch; }
+  .captcha-row input { flex: 1; }
+  .captcha-img {
+    width: 118px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    cursor: pointer; background: #f6faf7 center/contain no-repeat; color: var(--text-muted);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; text-align: center;
+    user-select: none;
+  }
+  .login-error { color: var(--danger); font-size: 13px; min-height: 18px; margin: 4px 0 8px; }
+  .login-hint {
+    margin-top: 22px; padding: 12px 14px; background: var(--brand-soft);
+    border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); font-size: 12px; color: var(--text-2); line-height: 1.9;
+  }
+  .login-hint b { color: var(--brand); }
+  .expired-tip { color: var(--warn); font-size: 13px; margin-bottom: 10px; display: none; }
+  @media (max-width: 760px) {
+    .login-card { grid-template-columns: 1fr; }
+    .login-brand { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="login-brand">
+      <div>
+        <div class="logo"><div class="brand-logo">旅</div><div class="t">旅游规划智能体</div></div>
+        <h2>智能旅游规划平台<br>Web 管理端</h2>
+        <p>旅行社经营管理 · 平台运营治理 · AI 行程规划</p>
+        <ul>
+          <li>· 产品 / 订单 / 客户 / 团队全流程管理</li>
+          <li>· 平台审核、结算与 RBAC 权限治理</li>
+          <li>· 与 C 端共用同一套 JWT + Casbin 后端</li>
+        </ul>
+      </div>
+      <div style="font-size:11px;color:#9fbda9">前后端分离架构 · Node.js /v1 API</div>
+    </div>
+
+    <div class="login-form">
+      <h1>账号登录</h1>
+      <div class="sub">登录名 / 手机号 + 密码 + 图形验证码</div>
+      <div class="expired-tip" id="expired-tip">登录状态已失效，请重新登录</div>
+      <div class="field"><label>登录账号</label><input type="text" id="account" placeholder="用户名或手机号" autocomplete="username"></div>
+      <div class="field"><label>密码</label><input type="password" id="password" placeholder="密码（8-72 位）" autocomplete="current-password"></div>
+      <div class="field"><label>图形验证码</label>
+        <div class="captcha-row">
+          <input type="text" id="captcha-code" placeholder="不区分大小写" maxlength="6">
+          <div class="captcha-img" id="captcha-img" title="点击刷新验证码">加载中…</div>
+        </div>
+      </div>
+      <div class="login-error" id="login-error"></div>
+      <button class="btn btn-primary" id="login-btn" style="width:100%;justify-content:center;padding:10px 0">登 录</button>
+
+      <div class="login-hint">
+        <b>演示账号</b>（密码均为 Admin@2026）：<br>
+        平台端：super ｜ 旅行社端：admin ｜ 业务专员：staff02 ｜ 云南风：yun_admin<br>
+        <span style="color:var(--text-muted)">后端地址：<span id="api-base-label"></span>（失败时可执行 <code>localStorage.web_api_base='http://127.0.0.1:3001/v1'</code> 切换）</span>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/api.js"></script>
+<script>
+(function () {
+  var api = window.WebApi;
+  var captchaId = "";
+  var $ = function (id) { return document.getElementById(id); };
+
+  $("api-base-label").textContent = api.BASE;
+
+  if (new URLSearchParams(location.search).get("expired")) {
+    $("expired-tip").style.display = "block";
+  }
+  // 已登录直接进入对应端首页
+  if (localStorage.getItem("web_tokens")) {
+    api.loadSession().then(function () {
+      location.replace(api.isAdmin() ? "platform-dashboard.html" : "agency-dashboard.html");
+    }).catch(function () { api.clearSession(); });
+  }
+
+  function refreshCaptcha() {
+    $("captcha-img").style.backgroundImage = "none";
+    $("captcha-img").textContent = "加载中…";
+    api.call("/auth/captcha", "GET").then(function (data) {
+      captchaId = data.captcha_id;
+      if (data.captcha_image) {
+        // svg 原文转 data URI
+        var svg = data.captcha_image;
+        if (svg.indexOf("data:image") === 0) {
+          $("captcha-img").style.backgroundImage = 'url("' + svg + '")';
+        } else {
+          $("captcha-img").style.backgroundImage =
+            'url("data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg))) + '")';
+        }
+        $("captcha-img").textContent = "";
+        if (data.dev_code) $("captcha-code").value = data.dev_code; // 开发环境自动回填
+      } else {
+        $("captcha-img").textContent = "点击刷新";
+      }
+    }).catch(function (err) {
+      $("captcha-img").textContent = "后端不可达";
+      $("login-error").textContent = "无法连接后端（" + api.BASE + "）：" + (err.message || "");
+    });
+  }
+  $("captcha-img").addEventListener("click", refreshCaptcha);
+  refreshCaptcha();
+
+  function doLogin() {
+    var account = $("account").value.trim();
+    var password = $("password").value;
+    var code = $("captcha-code").value.trim();
+    if (!account || !password || !code) { $("login-error").textContent = "请填写完整登录信息"; return; }
+    $("login-error").textContent = "";
+    var btn = $("login-btn");
+    btn.disabled = true; btn.textContent = "登录中…";
+    api.login(account, password, code, captchaId).then(function (session) {
+      var roleCodes = session.me.roles.map(function (r) { return r.code; });
+      if (roleCodes.indexOf("TOURIST") >= 0 && roleCodes.length === 1) {
+        api.clearSession();
+        $("login-error").textContent = "该账号为游客账号，请使用 C 端 App；管理端需管理账号登录";
+        refreshCaptcha();
+        return;
+      }
+      location.replace(api.isAdmin() ? "platform-dashboard.html" : "agency-dashboard.html");
+    }).catch(function (err) {
+      btn.disabled = false; btn.textContent = "登 录";
+      $("login-error").textContent = (err.message || "登录失败") + (err.traceId ? "（traceId: " + err.traceId + "）" : "");
+      refreshCaptcha();
+    });
+  }
+  $("login-btn").addEventListener("click", doLogin);
+  document.addEventListener("keydown", function (e) { if (e.key === "Enter") doLogin(); });
+})();
+</script>
+</body>
+</html>

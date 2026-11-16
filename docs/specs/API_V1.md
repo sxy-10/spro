@@ -1,11 +1,11 @@
 # 接口规范落地说明
 
-后端入口为 `/v1`，实现新版规范第 6 章的全部 18 个接口（含余位查询），另有 `/v1/auth/logout` 和机构隔离的 `/v1/admin/routes`、`/v1/admin/analytics`。旧 `/api` 原型路由不再挂载。公开接口以第 6 章清单为准：注册、登录、线路、余位和景点查询无需登录。
+后端入口为 `/v1`，实现新版规范第 6 章的全部 18 个接口（含余位查询），另有 `/v1/health`、`/v1/auth/logout`、机构隔离的管理端接口和聊天会话接口。旧 `/api` 原型路由不再挂载。公开接口以第 6 章清单为准：注册、登录、线路、余位和景点查询无需登录。
 
 ## 启动
 
 1. 新数据库执行 `database/01_schema.sql`，按需执行 `database/02_seed.sql`；已有数据库不要重跑带 DROP 的初始化脚本。
-2. 对数据库依次执行增量迁移 `database/04_api_v1.sql`、`database/05_rbac_schema.sql`、`database/06_route_stock.sql`，新增会话、幂等、限流、RBAC权限及日期库存锁位字段。
+2. 对数据库依次执行增量迁移 `database/04_api_v1.sql`、`database/05_rbac_schema.sql`、`database/06_route_stock.sql`、`database/08_rbac_complete.sql`，新增会话、幂等、限流、RBAC权限、日期库存锁位和审计表。
 3. 复制 `backend/.env.example` 为 `backend/.env`，配置 MySQL 和至少 32 字符的随机 `JWT_SECRET`。
 4. 在 backend、frontend 分别运行 `npm install`。后端运行 `npm run dev`，前端运行 `npm run dev`。验证命令为后端 `npm test`、两端 `npm run build`。
 
@@ -32,6 +32,8 @@ SHA256(JSON.stringify(请求体))
 PUT `/users/{id}` 完整资料字段为 nickname、avatar_url（可 null）、default_departure_city（可 null）。PATCH `/plans/{id}` 接受 title 和/或 instruction。评论体为 content、rating（1–5）。新增业务码：20014 限流、20015 重复资源或幂等键冲突、20016 防重放失败、50001 服务暂不可用。
 
 管理端与后台接口统一由 RBAC 授权：401 表示未登录或会话失效（业务码 20012），403 表示已登录但缺少权限（业务码 20013，文案固定「权限不足，禁止访问」），两者不得混用。判定由 Casbin 完成，路由上声明 `requireAction('模块:资源', '操作')`，权限数据来自 `sys_role`、`sys_permission`、`sys_role_permission`、`sys_user_role` 四张表；修改角色授权或用户角色后立即生效，无需重启服务。越权响应不回传缺失的权限码，只在服务端日志（`rbac.denied`）中留痕。详见 `docs/组员2-阶段二-Casbin授权层交付说明.md`。
+
+组员2补充接口：`GET /health` 无需登录并返回标准包络中的 `data.status = "ok"`；聊天接口为 `GET /chat/sessions`、`GET /chat/sessions/{id}/messages`、`POST /chat/sessions`（创建会话并写入首条用户消息）。游客获得 6 个按钮权限：会话查询、消息查询/发送、创建行程、创建/查询预订。管理端补齐 `PATCH /admin/routes/{id}`、`GET /admin/orders`，订单与统计按当前旅行社隔离；订单联系手机号脱敏。线路新增/修改与请求追踪号写入 `sys_audit_log`。写请求继续使用幂等键及 HMAC 签名约定。
 
 ## 部署及验证边界
 
