@@ -24,7 +24,7 @@
  */
 import type { ActiveTabKey } from '../types';
 import type { AuthPermissions, MenuNode } from './session';
-import { hasAnyPermissionCode } from './permissions';
+import { flattenMenus, hasAnyPermissionCode } from './permissions';
 
 /** TabBar 只认识这五个前台 Tab；'admin' 是独立全屏，不进底部导航 */
 export type FrontTabKey = Exclude<ActiveTabKey, 'admin'>;
@@ -93,24 +93,13 @@ const FRONT_MENU_ALIASES: Record<FrontTabKey, readonly string[]> = {
 
 const normalize = (value: string): string => value.trim().toLowerCase().replace(/\/+$/, '');
 
-/** 把菜单树拍平，父菜单与子菜单同等参与匹配（后端返回的是已过滤的授权子树） */
-export const flattenMenus = (menus: readonly MenuNode[]): MenuNode[] => {
-  const result: MenuNode[] = [];
-  const visit = (nodes: readonly MenuNode[]) => {
-    for (const node of nodes) {
-      result.push(node);
-      if (node.children?.length) visit(node.children);
-    }
-  };
-  visit(menus);
-  return result;
-};
+/** flattenMenus（菜单树拍平）来自 shared-auth/src/rbac.js，经 lib/permissions 转发 */
 
 /** 从 menus 中识别出「明确授权的前台 Tab」；返回空集合表示后端没有下发前台 Tab 菜单 */
 const grantedFrontTabs = (permissions: AuthPermissions | null): Set<FrontTabKey> => {
   const granted = new Set<FrontTabKey>();
   if (!permissions) return granted;
-  for (const node of flattenMenus(permissions.menus)) {
+  for (const node of flattenMenus(permissions.menus) as MenuNode[]) {
     const tokens = [node.code, node.path, node.name]
       .filter((token): token is string => Boolean(token))
       .map(normalize);
@@ -127,7 +116,7 @@ const grantedFrontTabs = (permissions: AuthPermissions | null): Set<FrontTabKey>
  */
 export const hasConsoleAccess = (permissions: AuthPermissions | null): boolean => {
   if (!permissions) return false;
-  const fromMenus = flattenMenus(permissions.menus).some((node) =>
+  const fromMenus = flattenMenus(permissions.menus).some((node: MenuNode) =>
     CONSOLE_MENU_CODES.includes(normalize(node.code ?? '')) ||
     CONSOLE_MENU_PATHS.includes(normalize(node.path ?? ''))
   );

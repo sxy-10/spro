@@ -484,7 +484,7 @@ platform.put('/platform/ai-service/config', requireAction('ai:service', 'config'
     await conn.query(
       `UPDATE ai_service_config SET
          persona=COALESCE(?, persona), model_params=COALESCE(?, model_params),
-         tools_json=COALESCE(JSON_MERGE_PATCH(COALESCE(tools_json,'{}'), CAST(? AS JSON)), tools_json),
+         tools_json=COALESCE(JSON_MERGE_PATCH(COALESCE(tools_json,'{}'), JSON_EXTRACT(?, '$')), tools_json),
          updated_by=?
        WHERE id=1`,
       [body.persona ?? null, body.model_params ?? null, body.tools ? JSON.stringify(body.tools) : null, user.id]);

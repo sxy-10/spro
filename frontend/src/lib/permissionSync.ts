@@ -1,14 +1,14 @@
 /**
  * 组员5（阶段4 · 前端权限）
  *
- * 权限同步：管理员在后台改完角色权限后，用户侧要「刷新即生效」。
- * 会话仓库（lib/session.ts）是唯一真相源，这里只负责重新拉一次
- * GET /v1/users/me/permissions 并写回会话，TabBar / 按钮守卫订阅会话后自动重渲染。
+ * 权限同步薄壳：实现已迁移至 shared-auth/src/auth.js（refreshPermissions 的
+ * 数据流）+ 本文件保留浏览器事件监听（与 React 无关，纯 window/document API）。
  *
- * 注意：这里只同步权限数据，不碰任何业务数据接口（业务接口留给下一轮统一处理）。
+ * 权限同步：管理员在后台改完角色权限后，用户侧要「刷新即生效」。
+ * 会话仓库是唯一真相源，这里只负责重新拉一次 GET /v1/users/me/permissions
+ * 并写回会话，TabBar / 按钮守卫订阅会话后自动重渲染。
  */
-import { loadPermissions } from './auth';
-import { getSession, setPermissions } from './session';
+import { getSession, setPermissions, loadPermissions } from '../../../shared-auth/index.js';
 import type { AuthPermissions } from './session';
 
 /**
