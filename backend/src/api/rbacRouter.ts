@@ -5,6 +5,7 @@ import { pool } from '../db/connection.js';
 import { ApiError, id, mobile, reply, run, page, list, write } from './core.js';
 import { matchPermission, requireAction } from '../auth/rbac.js';
 import { invalidatePolicyCache } from '../auth/casbin.js';
+import { dropUserSessions } from '../auth/sessionCache.js';
 import { hashPassword } from '../auth/security.js';
 
 /**
@@ -46,7 +47,17 @@ export const rbac = Router();
 rbac.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.on('finish', () => {
-      if (res.statusCode < 400) invalidatePolicyCache(`${req.method} ${req.originalUrl}`);
+      if (res.statusCode < 400) {
+        invalidatePolicyCache(`${req.method} ${req.originalUrl}`);
+        // 阶段六补丁：给某个用户改角色 / 停用 / 删号之后，Redis 里还缓存着
+        // "他是谁、有什么角色和权限"（TTL 5 分钟）—— 不一起清掉的话，
+        // 被撤权的人还能继续用旧权限访问，属于典型的越权窗口。
+        // 这里只处理 /admin/users/:id 这类"明确指向单个用户"的写操作；
+        // 改"角色→权限"映射会影响该角色下所有人，逐个清理代价太大，靠 5 分钟 TTL 收敛。
+        if (/\/admin\/users\//.test(req.originalUrl) && typeof req.params?.id === 'string') {
+          void dropUserSessions(String(req.params.id));
+        }
+      }
     });
   }
   next();

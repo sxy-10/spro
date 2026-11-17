@@ -11,7 +11,8 @@
     "test:rbac": "tsx --test --test-force-exit src/auth/rbac.test.ts",
     "test:auth": "tsx --test --test-force-exit src/auth/auth.test.ts",
     "e2e:rbac": "tsx src/api/rbacRouter.e2e.ts",
-    "db:check": "tsx src/db/preflight.ts"
+    "db:check": "tsx src/db/preflight.ts",
+    "mq:replay": "tsx scripts/mq-replay.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -26,7 +27,6 @@
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "svg-captcha": "^1.4.0",
-    "travel-agent-system": "file:..",
     "zod": "^4.6.7"
   },
   "devDependencies": {

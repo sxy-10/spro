@@ -19,7 +19,7 @@ import { chatRouter } from './chatRouter.js';
 import { aiAgentRouter } from './aiAgentRouter.js';
 import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
-import { bearerToken, dropCachedUser } from '../auth/sessionCache.js';
+import { bearerToken, dropCachedUser, dropUserSessions } from '../auth/sessionCache.js';
 import { listDict, isDictType } from '../db/dict.js';
 
 export const api = Router();
@@ -176,6 +176,9 @@ api.post('/auth/reset-password', run(async (req, res) => {
             await conn.query('UPDATE api_session SET is_revoked=1 WHERE user_id=?', [rows[0].id]);
             return { data: null };
         }, false);
+        // 阶段六补丁：MySQL 里的会话已吊销，但 Redis 里还缓存着"这个人是谁、有什么权限"，
+        // 不一起清掉的话，旧 token 在 TTL（5 分钟）内仍然能通过认证 —— 相当于改密码没生效。
+        await dropUserSessions(rows[0].id);
     } else {
         // 用户不存在：假装成功，延迟保持响应时间一致，防止通过响应时间枚举用户
         await new Promise(r => setTimeout(r, 120));

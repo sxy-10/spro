@@ -1,6 +1,15 @@
+import { createHash } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { secret } from '../api/core.js';
-import { cacheDel, hashGetAll, hashSetAll } from '../db/redis.js';
+import {
+  cacheDel,
+  getRedis,
+  hashGetAll,
+  hashSetAll,
+  redisKey,
+  sessionIndexAdd,
+  sessionIndexMembers
+} from '../db/redis.js';
 import type { AuthenticatedUserPayload } from './passport.js';
 
 /**
@@ -16,14 +25,22 @@ import type { AuthenticatedUserPayload } from './passport.js';
  *   - 命中缓存时仍会**重新验签 JWT**，防止伪造/篡改 token 直接读到缓存
  *   - 退出登录立即删 key；改密码/吊销会话最迟在 TTL 后生效
  *
- * key 里直接放 token，是因为 token 本身是不可猜测的签名串；
- * 想更隐蔽可以存 sha256(token)，但那样排障时要多一步计算，这里选可读性。
+ * 阶段六修复：
+ * ① **key 不再用 token 原文**。原来 key 是 `auth:token:<JWT>`，
+ *    JWT 会原样出现在 RDB 快照、SLOWLOG、MONITOR、CLIENT LIST 里 ——
+ *    等于把登录凭据抄了四份散落在磁盘和日志里。现在一律存 sha256(token)。
+ * ② **加了"按用户踢人"的索引**（Set：auth:user:<id>:sessions），
+ *    改密码 / 封号时可以一次性清掉该用户所有登录态，不用等 TTL。
  */
 
 /** 缓存 TTL（秒），默认 300 秒；可用 AUTH_CACHE_TTL_SECONDS 调整 */
 export const AUTH_CACHE_TTL_SECONDS = Number(process.env.AUTH_CACHE_TTL_SECONDS ?? 300);
 
-const cacheKeyOf = (token: string): string => `auth:token:${token}`;
+/** token 的稳定指纹（同一个 token 每次得到同一个 key，且不泄漏 token 本身） */
+const fingerprintOf = (token: string): string => createHash('sha256').update(token).digest('hex');
+
+const cacheKeyOf = (token: string): string => `auth:sess:${fingerprintOf(token)}`;
+const indexKeyOf = (userId: string | number): string => `auth:user:${userId}:sessions`;
 
 /** 从 Authorization 头里取 token */
 export function bearerToken(header: string | undefined): string | null {
@@ -67,9 +84,9 @@ export async function readCachedUser(token: string): Promise<AuthenticatedUserPa
   }
 }
 
-/** 写缓存（登录后首次认证成功时回填） */
+/** 写缓存（登录后首次认证成功时回填），同时登记进"用户 → 会话"索引 */
 export async function writeCachedUser(token: string, user: AuthenticatedUserPayload): Promise<boolean> {
-  return hashSetAll(
+  const ok = await hashSetAll(
     cacheKeyOf(token),
     {
       user_id: String(user.id),
@@ -82,9 +99,37 @@ export async function writeCachedUser(token: string, user: AuthenticatedUserPayl
     },
     AUTH_CACHE_TTL_SECONDS
   );
+
+  // 索引只是"加速踢人"的优化，失败不影响本次认证
+  if (ok) await sessionIndexAdd(indexKeyOf(user.id), fingerprintOf(token), AUTH_CACHE_TTL_SECONDS);
+  return ok;
 }
 
 /** 退出登录时调用：立即失效，不等 TTL */
 export async function dropCachedUser(token: string): Promise<void> {
+  const data = await hashGetAll(cacheKeyOf(token));
   await cacheDel(cacheKeyOf(token));
+  if (data?.user_id) {
+    // 从索引里摘掉（Set 里只存指纹，删除失败也无所谓）
+    try {
+      const redis = getRedis();
+      await redis?.srem(redisKey(indexKeyOf(data.user_id)), fingerprintOf(token));
+    } catch {
+      // 忽略
+    }
+  }
+}
+
+/**
+ * 一次性清掉某个用户的全部登录态（改密码 / 管理员踢人 / 封号）。
+ * 返回清掉了几条缓存会话。
+ */
+export async function dropUserSessions(userId: string | number): Promise<number> {
+  const indexKey = indexKeyOf(userId);
+  const fingerprints = await sessionIndexMembers(indexKey);
+  if (fingerprints.length) {
+    await cacheDel(...fingerprints.map((fingerprint) => `auth:sess:${fingerprint}`));
+  }
+  await cacheDel(indexKey);
+  return fingerprints.length;
 }

@@ -35,6 +35,16 @@ import {
 
 const TEST_SECRET = 'test-secret-with-at-least-32-characters';
 process.env.JWT_SECRET = TEST_SECRET;
+/**
+ * 阶段六：关掉 Redis。
+ *
+ * 这个用例靠「改 mock 数据库里的 persona」来模拟"同一个 token 换身份"，
+ * 而登录态缓存（auth:sess:*，TTL 5 分钟，真实 Redis）会让第二次 persona 切换读到上一次的
+ * 角色/权限 —— 表现就是偶发的 "menus.length 期望 1、实际 0"。
+ * 单测不该依赖外部有状态服务，这里显式降级：getRedis() 返回 null，缓存与限流自动走 MySQL 分支。
+ */
+process.env.REDIS_DISABLED = '1';
+process.env.RATE_LIMIT_DISABLED = '1';
 
 const fakeRes = () => ({ locals: {} as Record<string, unknown> }) as any;
 const invoker = () => {

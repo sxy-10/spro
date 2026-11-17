@@ -4,6 +4,7 @@ import { z } from 'zod';
 import jwt from 'jsonwebtoken';
 import { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { pool } from '../db/connection.js';
+import { tokenBucket } from '../db/redis.js';
 
 export class ApiError extends Error {
   constructor(public status: number, public code: number, message: string) { super(message); }
@@ -69,11 +70,59 @@ export async function list(conn: typeof pool | PoolConnection, select: string, c
   const total = Number(totals[0].total);
   return { list: rows, total, has_more: p.page * p.size < total };
 }
-export async function rateLimit(key: string, limit: number) {
-  const bucket = hash(`${key}:${Math.floor(Date.now() / 60000)}`);
-  await pool.query(`INSERT INTO api_rate_limit(bucket_hash,hits,expires_at) VALUES (?,1,DATE_ADD(UTC_TIMESTAMP(), INTERVAL 2 MINUTE)) ON DUPLICATE KEY UPDATE hits=hits+1`, [bucket]);
-  const [rows] = await pool.query<RowDataPacket[]>('SELECT hits FROM api_rate_limit WHERE bucket_hash=?', [bucket]);
-  if (rows[0].hits > limit) throw new ApiError(429, 20014, '请求过于频繁，请稍后重试');
+/* ------------------------------------------------------------------ *
+ * 限流（阶段六改造）
+ *
+ * 旧实现：每秒 2 条 SQL（INSERT ... ON DUPLICATE KEY UPDATE + SELECT），
+ *   - 不是原子操作：两条语句之间状态可能被别的请求改掉；
+ *   - 固定 1 分钟窗口，在窗口边界能放过 2 倍流量；
+ *   - api_rate_limit 表只增不删（实测已积累上百行），攻击时会先把数据库打死。
+ *
+ * 新实现：Redis 令牌桶（一次 EVAL 完成"补令牌 + 判定 + 扣令牌"），
+ *   每条请求 0 条 SQL；Redis 不可用时才降级到原来的 MySQL 方案。
+ * ------------------------------------------------------------------ */
+
+/** 一个 429 异常，附带「多少秒后可以再试」（errors() 会把它写进 Retry-After 响应头） */
+export class RateLimitError extends ApiError {
+  constructor(public retryAfterSeconds: number) {
+    super(429, 20014, '请求过于频繁，请稍后重试');
+  }
+}
+
+export async function rateLimit(key: string, limit: number, windowSeconds = 60) {
+  // 单测里把 Redis 关掉，保证断言可重复（见 api.test.ts 的 RATE_LIMIT_DISABLED）
+  if (process.env.RATE_LIMIT_DISABLED === '1') return;
+
+  // 1) 快路径：Redis 令牌桶。容量 = limit，补充速率 = limit / 窗口秒数
+  const bucket = await tokenBucket(`rl:${key}`, limit, limit / windowSeconds);
+  if (bucket) {
+    if (!bucket.allowed) {
+      const costSeconds = limit > 0 ? windowSeconds / limit : 1;
+      throw new RateLimitError(Math.max(1, Math.ceil(costSeconds)));
+    }
+    return;
+  }
+
+  // 2) 降级：Redis 不可用时才写库（保留原语义，保证"没有 Redis 也能限流"）
+  const bucketHash = hash(`${key}:${Math.floor(Date.now() / 60000)}`);
+  await pool.query(`INSERT INTO api_rate_limit(bucket_hash,hits,expires_at) VALUES (?,1,DATE_ADD(UTC_TIMESTAMP(), INTERVAL 2 MINUTE)) ON DUPLICATE KEY UPDATE hits=hits+1`, [bucketHash]);
+  const [rows] = await pool.query<RowDataPacket[]>('SELECT hits FROM api_rate_limit WHERE bucket_hash=?', [bucketHash]);
+  if (rows[0].hits > limit) throw new RateLimitError(60);
+}
+
+/**
+ * 清理过期的限流桶（server.ts 里每 5 分钟跑一次）。
+ * 旧实现没有任何清理逻辑，api_rate_limit 会无限增长；现在即使降级走库也不会失控。
+ */
+export async function cleanupExpiredRateLimits(batch = 5000): Promise<number> {
+  try {
+    const [result]: any = await pool.query(
+      'DELETE FROM api_rate_limit WHERE expires_at < UTC_TIMESTAMP() LIMIT ?', [batch]
+    );
+    return Number(result?.affectedRows ?? 0);
+  } catch {
+    return 0;
+  }
 }
 export async function write(req: Request, res: Response, action: (conn: PoolConnection) => Promise<{data: unknown; status?: number}>, important = true) {
   const key = z.string().min(8).max(128).parse(req.get('Idempotency-Key'));
@@ -112,7 +161,7 @@ export function errors(error: any, _req: Request, res: Response, _next: NextFunc
   const invalid = error instanceof z.ZodError || error.type === 'entity.parse.failed' || error.type === 'entity.too.large';
   const duplicate = error.code === 'ER_DUP_ENTRY';
   const status = known ? error.status : invalid ? 400 : duplicate ? 409 : 500;
-  if (status === 429) res.setHeader('Retry-After', '60');
+  if (status === 429) res.setHeader('Retry-After', String(error instanceof RateLimitError ? error.retryAfterSeconds : 60));
   if (status >= 500) console.error(JSON.stringify({ trace_id: res.locals.traceId, code: 'INTERNAL_ERROR', message: error?.message, stack: error?.stack?.split('\n').slice(1, 4).join(' | ') }));
   res.status(status).json({ code: known ? error.code : invalid ? 10001 : duplicate ? 20015 : 50000,
     message: known ? error.message : invalid ? '参数为空、格式错误或超出允许范围' : duplicate ? '资源已存在' : '服务器内部错误，请稍后重试', data: null, trace_id: res.locals.traceId ?? randomUUID() });

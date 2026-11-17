@@ -9,6 +9,9 @@ import { expireUnpaidOrders, settlePaidOrder } from './stock.js';
 
 test('v1 HTTP contract, ownership, signing, idempotency and order state', async () => {
   process.env.JWT_SECRET='test-secret-with-at-least-32-characters';
+  // 限流已迁到 Redis 令牌桶，单测不该依赖真实 Redis 的桶状态（否则连跑几遍就会 429）。
+  // 这里显式关闭应用层限流，语料见 core.ts 的 rateLimit。
+  process.env.RATE_LIMIT_DISABLED='1';
   const originalQuery=pool.query, originalConnection=pool.getConnection;
   const cache=new Map<string,any>(), nonces=new Set<string>();
   let orders=0, status='PENDING';
