@@ -29,6 +29,69 @@ export interface NodeCheckState {
   indeterminate: boolean;
 }
 
+/** GET /v1/permissions 返回的菜单树原始节点（children 只有子菜单，不含按钮） */
+export interface RawMenuNode {
+  permission_id: string;
+  name: string;
+  code: string;
+  path?: string | null;
+  children?: readonly RawMenuNode[];
+}
+
+export interface RawButtonNode {
+  permission_id: string;
+  parent_id: string | null;
+  name: string;
+  code: string;
+}
+
+/**
+ * 把 GET /v1/permissions 的返回拼成可勾选的编辑树。
+ *
+ * 后端的 menus 树只含 MENU（children 也只有子菜单），BUTTON 是按 parent_id
+ * 平铺在 buttons 数组里的 —— 而编辑树组件要求按钮挂在所属菜单的 children 下，
+ * 所以在这里做一次「菜单转节点 + 按钮归位」。父菜单缺失的孤儿按钮提升为根节点，
+ * 保证勾选粒度不丢。
+ */
+export const buildEditableTree = (
+  menus: readonly RawMenuNode[],
+  buttons: readonly RawButtonNode[]
+): PermissionTreeNode[] => {
+  const convertMenu = (node: RawMenuNode): PermissionTreeNode => ({
+    permission_id: node.permission_id,
+    name: node.name,
+    code: node.code,
+    resource_type: 'MENU',
+    path: node.path ?? null,
+    children: (node.children ?? []).map(convertMenu)
+  });
+
+  const tree = menus.map(convertMenu);
+  const menuById = new Map<string, PermissionTreeNode>();
+  const walk = (nodes: readonly PermissionTreeNode[]): void => {
+    for (const node of nodes) {
+      menuById.set(node.permission_id, node);
+      walk(node.children ?? []);
+    }
+  };
+  walk(tree);
+
+  for (const button of buttons) {
+    const node: PermissionTreeNode = {
+      permission_id: button.permission_id,
+      name: button.name,
+      code: button.code,
+      resource_type: 'BUTTON',
+      path: null,
+      children: []
+    };
+    const parent = button.parent_id != null ? menuById.get(button.parent_id) : undefined;
+    if (parent) parent.children?.push(node);
+    else tree.push(node);
+  }
+  return tree;
+};
+
 /**
  * 由草稿推导节点显示状态：
  * 叶子看自身；父节点全勾 → 勾，部分勾 → 半选，全不勾 → 空。

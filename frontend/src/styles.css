@@ -3522,3 +3522,59 @@ input:checked + .toggle-slider:before {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* ===== 组员2（阶段5接线）：角色管理区块（RoleAdminSection） ===== */
+.role-create-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: #f7f8fa;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.role-create-input {
+  flex: 1 1 160px;
+  min-width: 140px;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  outline: none;
+}
+
+.role-create-input:focus {
+  border-color: #3b82f6;
+}
+
+.role-create-input-wide {
+  flex: 2 1 220px;
+}
+
+.role-meta-line {
+  padding: 4px 12px 8px;
+  font-size: 12px;
+  color: var(--theme-text-secondary, #6b7280);
+}
+
+.role-manage-error {
+  margin: 6px 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+}
+
+.role-manage-notice {
+  margin: 6px 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #166534;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+}

@@ -1,6 +1,7 @@
 import React from 'react';
 import { AdminMetricsData } from '../types';
 import { AuthPermission } from './AuthPermission';
+import { RoleAdminSection } from './admin/RoleAdminSection';
 
 interface AdminScreenProps {
   adminData: AdminMetricsData;
@@ -89,6 +90,9 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
           ))}
         </div>
       </div>
+
+      {/* 模块 3：角色与权限配置（RBAC 管理接口接线；无 system:role:query 权限自动隐藏） */}
+      <RoleAdminSection />
     </div>
   );
 };
