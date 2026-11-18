@@ -371,9 +371,12 @@ api.get('/users/:id', run(async (req, res) => {
   const [rows] = await pool.query<RowDataPacket[]>(`SELECT ${userFields} FROM sys_user WHERE id=?`, [userId]);
   const {phone, ...user} = rows[0]; reply(res, { ...user, mobile: maskMobile(phone) });
 }));
-api.put('/users/:id', run(async (req, res) => {
+api.put('/users/:id', (req, res, next) => {
   const userId = id.parse(req.params.id);
-  if (userId !== String(res.locals.user.id)) throw new ApiError(403, 20013, '无权修改该用户');
+  if (userId === String(res.locals.user.id)) { next(); return; }
+  requirePermission('system:user:update')(req, res, next);
+}, run(async (req, res) => {
+  const userId = id.parse(req.params.id);
   const body = z.object({ nickname: text(50), avatar_url: z.string().url().max(512).nullable(), default_departure_city: text(50).nullable() }).strict().parse(req.body);
   await write(req, res, async conn => {
     await conn.query('UPDATE sys_user SET nickname=?,avatar_url=?,default_departure_city=? WHERE id=?', [body.nickname,body.avatar_url,body.default_departure_city,userId]);
@@ -406,7 +409,7 @@ function internalPlan(value: any): any {
     [k.replace(/_([a-z])/g, (_match, c) => c.toUpperCase()), internalPlan(v)]));
   return value;
 }
-api.post('/plans', run(async (req,res) => {
+api.post('/plans', requirePermission('itinerary:plan:add'), run(async (req,res) => {
   const body = planInput.parse(req.body);
   await write(req,res,async conn => {
     const preference = await planner.extractPreferenceFromText(body.prompt ?? body.destination);
@@ -426,13 +429,13 @@ api.post('/plans', run(async (req,res) => {
     return { data:{ ...snapshot, version:1, status:'PENDING_CONFIRM' }, status:201 };
   });
 }));
-api.get('/plans', run(async(req,res)=>{
+api.get('/plans', requirePermission('itinerary:plan:query'), run(async(req,res)=>{
   const p=page(req.query,['created_at','title'],{status:z.enum(['DRAFT','PLANNING','PENDING_CONFIRM','OPTIMIZING','CONFIRMED','EXPORTED','ARCHIVED']).optional()});
   const where=`FROM itinerary WHERE user_id=? AND is_deleted=0${p.status?' AND status=?':''}`;
   reply(res,await list(pool,`SELECT ${planFields} ${where}`,`SELECT COUNT(*) total ${where}`,[res.locals.user.id,...(p.status?[p.status]:[])],p));
 }));
-api.get('/plans/:id', run(async(req,res)=>{ reply(res,await planDetail(pool,await ownedPlan(pool,req.params.id,res.locals.user.id))); }));
-api.patch('/plans/:id',run(async(req,res)=>{
+api.get('/plans/:id', requirePermission('itinerary:plan:query'), run(async(req,res)=>{ reply(res,await planDetail(pool,await ownedPlan(pool,req.params.id,res.locals.user.id))); }));
+api.patch('/plans/:id', requirePermission('itinerary:plan:update'), run(async(req,res)=>{
   const body=z.object({title:text(100).optional(),instruction:text(500).optional()}).strict().refine(v=>v.title||v.instruction).parse(req.body);
   await write(req,res,async conn=>{
     const row=await ownedPlan(conn,req.params.id,res.locals.user.id,true);
@@ -445,12 +448,12 @@ api.patch('/plans/:id',run(async(req,res)=>{
     return {data:snapshot};
   });
 }));
-api.delete('/plans/:id',run(async(req,res)=>{
+api.delete('/plans/:id', requirePermission('itinerary:plan:delete'), run(async(req,res)=>{
   z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/).parse(req.params.id);
   await pool.query('UPDATE itinerary SET is_deleted=1 WHERE itinerary_no=? AND user_id=?',[req.params.id,res.locals.user.id]);
   res.status(204).end();
 }));
-api.post('/orders',run(async(req,res)=>{
+api.post('/orders', requirePermission('order:add'), run(async(req,res)=>{
   const body=z.object({route_id:id,travel_date:travelDate,people_count:z.number().int().min(1).max(100),contact_mobile:mobile}).strict().parse(req.body);
   await write(req,res,async conn=>{
     const [routes]=await conn.query<RowDataPacket[]>('SELECT id,base_price_rmb FROM travel_product WHERE id=? AND status=\'ON_SALE\' FOR UPDATE',[body.route_id]);
@@ -465,13 +468,13 @@ api.post('/orders',run(async(req,res)=>{
     return {data:rows[0],status:201};
   });
 }));
-api.get('/orders',run(async(req,res)=>{
+api.get('/orders', requirePermission('order:query'), run(async(req,res)=>{
   const p=page(req.query,['created_at','total_amount'],{status:z.enum(['CREATED','PAID','CANCELED','COMPLETED','REFUNDED']).optional()});
   const status=({CREATED:'PENDING',CANCELED:'CANCELLED'} as Record<string,string>)[p.status]??p.status;
   const where=`FROM tour_order WHERE user_id=?${status?' AND status=?':''}`;
   reply(res,await list(pool,`SELECT ${orderFields} ${where}`,`SELECT COUNT(*) total ${where}`,[res.locals.user.id,...(status?[status]:[])],p));
 }));
-api.get('/orders/:id',run(async(req,res)=>{
+api.get('/orders/:id', requirePermission('order:query'), run(async(req,res)=>{
   const [rows]=await pool.query<RowDataPacket[]>(`SELECT ${orderFields},contact_phone FROM tour_order WHERE id=? AND user_id=?`,[id.parse(req.params.id),res.locals.user.id]);
   if(!rows.length) throw new ApiError(404,20016,'订单不存在');
   const {contact_phone,...order}=rows[0]; reply(res,{...order,contact_mobile:maskMobile(contact_phone)});
@@ -487,7 +490,7 @@ api.post('/orders/:id/cancel',run(async(req,res)=>{
     return {data:{order_id:orderId,status:'CANCELED'}};
   });
 }));
-api.post('/spots/:id/comments',run(async(req,res)=>{
+api.post('/spots/:id/comments', requirePermission('comment:add'), run(async(req,res)=>{
   const spotId=id.parse(req.params.id);
   const body=z.object({content:text(2000),rating:z.number().int().min(1).max(5)}).strict().parse(req.body);
   await write(req,res,async conn=>{
@@ -611,5 +614,11 @@ api.get('/admin/analytics', requirePermission('order:manage:query'), run(async(r
        FROM travel_product WHERE agency_id=?`,
     [agencyId]
   );
-  reply(res,{...orderRows[0],...routeRows[0]});
+  const [todayRows]=await pool.query<RowDataPacket[]>(
+    `SELECT COALESCE(SUM(DATE(created_at)=CURRENT_DATE()),0) AS today_order_count
+       FROM tour_order
+      WHERE product_id IN (SELECT id FROM travel_product WHERE agency_id=?)`,
+    [agencyId]
+  );
+  reply(res,{...orderRows[0],...routeRows[0],...todayRows[0]});
 }));

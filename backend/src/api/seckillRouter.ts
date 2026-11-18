@@ -30,6 +30,7 @@ import { RowDataPacket } from 'mysql2/promise';
 import { pool } from '../db/connection.js';
 import { cacheDel, getRedis, incrBy, isRedisReady, preDeductStock, readStock, redisKey, setNx } from '../db/redis.js';
 import { warmUpStock } from './stockCache.js';
+import { requirePermission } from '../auth/rbac.js';
 import { publishSeckill } from '../mq/producer.js';
 import { authenticateJwt } from '../auth/passport.js';
 import type { AuthenticatedUserPayload } from '../auth/passport.js';
@@ -64,7 +65,7 @@ function resolveReqId(idempotencyKey: string | undefined, userId: number): strin
 }
 
 /** POST /v1/seckill/:routeId */
-seckillRouter.post('/seckill/:routeId', authenticateJwt, run(async (req, res) => {
+seckillRouter.post('/seckill/:routeId', authenticateJwt, requirePermission('order:seckill'), run(async (req, res) => {
   const routeId = Number(req.params.routeId);
   if (!Number.isInteger(routeId) || routeId <= 0) throw new ApiError(400, 10001, '路线ID不合法');
 

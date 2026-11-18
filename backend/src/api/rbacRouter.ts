@@ -58,6 +58,26 @@ rbac.use((req, res, next) => {
           void dropUserSessions(String(req.params.id));
         }
       }
+      if (res.statusCode < 400) {
+        void pool.query(
+          `INSERT INTO sys_audit_log
+             (actor_id, action, resource_type, resource_id, request_method, request_path, detail, trace_id)
+           VALUES (?, ?, 'RBAC', ?, ?, ?, ?, ?)`,
+          [
+            res.locals.user?.id ?? null,
+            req.method,
+            req.params?.id ? String(req.params.id) : null,
+            req.method,
+            req.originalUrl,
+            JSON.stringify({ body: req.body }),
+            res.locals.traceId ?? null
+          ]
+        ).catch((error) => console.warn(JSON.stringify({
+          level: 'warn',
+          event: 'audit.write_failed',
+          message: error?.message ?? String(error)
+        })));
+      }
     });
   }
   next();

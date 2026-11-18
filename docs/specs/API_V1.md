@@ -35,6 +35,22 @@ PUT `/users/{id}` 完整资料字段为 nickname、avatar_url（可 null）、de
 
 组员2补充接口：`GET /health` 无需登录并返回标准包络中的 `data.status = "ok"`；聊天接口为 `GET /chat/sessions`、`GET /chat/sessions/{id}/messages`、`POST /chat/sessions`（创建会话并写入首条用户消息）。游客获得 6 个按钮权限：会话查询、消息查询/发送、创建行程、创建/查询预订。管理端补齐 `PATCH /admin/routes/{id}`、`GET /admin/orders`，订单与统计按当前旅行社隔离；订单联系手机号脱敏。线路新增/修改与请求追踪号写入 `sys_audit_log`。写请求继续使用幂等键及 HMAC 签名约定。
 
+## 即时通讯接口（阶段 1 骨架）
+
+所有接口都需 Bearer token。`11_im.sql` 创建 `im_conversation`、`im_participant`、`im_message`、`im_device`、`im_read_cursor`；`12_im_perm.sql` 为 TOURIST 授予前三个即时通讯权限，为 AGENCY_ADMIN / AGENT 授予全部四个 IM 权限及实时统计权限。
+
+| 方法 | 路径 | 权限 | 请求/查询 |
+|---|---|---|---|
+| GET | `/im/conversations` | `im:session:query` | page、size |
+| POST | `/im/conversations` | `im:conv:manage` | `title`、`member_ids` |
+| POST | `/im/conversations/{id}/participants` | `im:conv:manage` | `user_ids`；校验 OWNER |
+| GET | `/im/conversations/{id}/messages` | `im:message:query` | `since_id` |
+| POST | `/im/messages` | `im:message:send` | `conversation_id`、`client_msg_id`、`content` |
+| POST | `/im/messages/{id}/read` | `im:message:send` | 校验会话成员 |
+| GET | `/im/conversations/{id}/unread` | `im:message:query` | 校验会话成员 |
+
+除 `GET /im/conversations/{id}/messages` 仅以 SQL 读取已有消息外，接口暂时返回 501；消息发送服务明确抛出 not implemented。实时统计 `GET /stats/live` 返回 SSE 占位数据，每 5 秒推送一次；真实统计留待后续阶段实现。
+
 ## 部署及验证边界
 
 生产环境必须经可信 TLS 代理；配置 PUBLIC_API_ORIGIN 和 CORS_ORIGINS。仅在代理正确清除外部 forwarding headers 时设置 TRUST_PROXY=1；生产 HTTP 返回 308 并开启 HSTS。数据库连接使用 UTC，DECIMAL 和 BIGINT 保留字符串。请求 JSON 上限 64KB，开启 gzip，私有响应 no-store，网络请求超时 30 秒。

@@ -9,6 +9,8 @@ import { ApiError, errors, reply, run } from './api/core.js';
 import { getQueueStats } from './mq/consumer.js';
 import { redisStats } from './db/redis.js';
 import passport from './auth/passport.js';
+import { imRouter } from './api/imRouter.js';
+import { statsRouter } from './api/statsRouter.js';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -55,7 +57,6 @@ app.use((req, _res, next) => {
   next();
 });
 app.use(passport.initialize());
-
 /**
  * 阶段六新增：队列与 Redis 的可观测性接口。
  *
@@ -69,7 +70,15 @@ app.get('/v1/health/queue', run(async (_req, res) => {
   reply(res, { queue, redis });
 }));
 
+app.get('/v1/health', (_req, res) => res.status(200).json({
+  code: 0,
+  message: 'ok',
+  data: { status: 'ok' },
+  trace_id: res.locals.traceId
+}));
 app.use('/v1', api);
 app.use('/v1', seckillRouter);
+app.use('/v1', imRouter);
+app.use('/v1', statsRouter);
 app.use((_req, _res, next) => next(new ApiError(404,20016,'接口不存在')));
 app.use(errors);

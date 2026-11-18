@@ -65,3 +65,48 @@ chatRouter.post('/sessions', requirePermission('chat:message:add'), run(async (r
     };
   });
 }));
+
+chatRouter.post('/messages', requirePermission('chat:message:add'), run(async (req, res) => {
+  const body = z.object({
+    session_id: id.optional(),
+    content: z.string().trim().min(1).max(2000)
+  }).strict().parse(req.body);
+
+  await write(req, res, async (conn) => {
+    let sessionId: number;
+    if (body.session_id) {
+      sessionId = Number(body.session_id);
+      const [sessions] = await conn.query<RowDataPacket[]>(
+        'SELECT id FROM chat_session WHERE id = ? AND user_id = ?',
+        [sessionId, res.locals.user.id]
+      );
+      if (!sessions.length) throw new ApiError(404, 20016, '会话不存在');
+    } else {
+      const [session] = await conn.query<ResultSetHeader>(
+        `INSERT INTO chat_session (user_id, title, message_count, last_active_at)
+         VALUES (?, ?, 1, UTC_TIMESTAMP())`,
+        [res.locals.user.id, body.content.slice(0, 100)]
+      );
+      sessionId = session.insertId;
+    }
+
+    const [message] = await conn.query<ResultSetHeader>(
+      `INSERT INTO chat_message (session_id, sender, content)
+       VALUES (?, 'USER', ?)`,
+      [sessionId, body.content]
+    );
+    await conn.query(
+      'UPDATE chat_session SET message_count = message_count + 1, last_active_at = UTC_TIMESTAMP() WHERE id = ?',
+      [sessionId]
+    );
+    return {
+      data: {
+        session_id: String(sessionId),
+        message_id: String(message.insertId),
+        sender: 'USER',
+        content: body.content
+      },
+      status: 201
+    };
+  });
+}));

@@ -1,58 +1,56 @@
--- Additive RBAC completion for member 2. Run after 05_rbac_schema.sql.
--- Safe to re-run; existing RBAC assignments and audit history are preserved.
+-- Additive RBAC completion for member 2.
+-- Run after 01_schema.sql and 05_rbac_schema.sql.
 USE travel_agent_db;
 
-CREATE TABLE IF NOT EXISTS sys_audit_log (
-  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  actor_id        BIGINT UNSIGNED NULL,
-  action          VARCHAR(64) NOT NULL,
-  resource_type   VARCHAR(64) NOT NULL,
-  resource_id     VARCHAR(64) NULL,
-  request_method  VARCHAR(10) NOT NULL,
-  request_path    VARCHAR(255) NOT NULL,
-  before_data     JSON NULL,
-  after_data      JSON NULL,
-  trace_id        CHAR(36) NULL,
-  created_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (id),
-  KEY idx_audit_actor_time (actor_id, created_at),
-  KEY idx_audit_resource_time (resource_type, resource_id, created_at),
-  KEY idx_audit_time (created_at)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
-  COMMENT = '管理操作审计日志；保留执行人、资源变更前后数据及请求追踪号';
+INSERT IGNORE INTO sys_permission (parent_id, name, code, resource_type, path, icon, sort)
+SELECT parent.id, child.name, child.code, 'BUTTON', NULL, NULL, child.sort
+  FROM (
+    SELECT 'itinerary:plan' AS parent_code, '创建行程' AS name, 'itinerary:plan:add' AS code, 4 AS sort
+    UNION ALL SELECT 'itinerary:plan', '导出行程', 'itinerary:plan:export', 5
+    UNION ALL SELECT 'order:manage', '创建订单', 'order:add', 4
+    UNION ALL SELECT 'order:manage', '查询订单', 'order:query', 5
+    UNION ALL SELECT 'order:manage', '秒杀下单', 'order:seckill', 6
+  ) AS child
+  JOIN sys_permission parent ON parent.code = child.parent_code;
 
--- New menu parents. Existing menu IDs and codes remain unchanged.
-INSERT IGNORE INTO sys_permission (id, parent_id, name, code, resource_type, path, icon, sort) VALUES
-  (50, NULL, '智能体对话', 'chat', 'MENU', '/chat', 'message', 5),
-  (51, 50, '会话管理', 'chat:session', 'MENU', '/chat/sessions', 'message', 1),
-  (32, 30, '预订管理', 'order:booking', 'MENU', '/orders/booking', 'profile', 2);
+INSERT IGNORE INTO sys_permission (parent_id, name, code, resource_type, path, icon, sort)
+VALUES (NULL, '景点评价', 'comment', 'MENU', '/spots/comments', 'comment', 6);
+INSERT IGNORE INTO sys_permission (parent_id, name, code, resource_type, sort)
+SELECT id, '发表评论', 'comment:add', 'BUTTON', 1
+  FROM sys_permission WHERE code = 'comment';
 
--- Six visitor-facing permissions: chat read/write, create plans, and create/query bookings.
-INSERT IGNORE INTO sys_permission (id, parent_id, name, code, resource_type, path, icon, sort) VALUES
-  (501, 51, '查询会话', 'chat:session:query', 'BUTTON', NULL, NULL, 1),
-  (502, 51, '查询消息', 'chat:message:query', 'BUTTON', NULL, NULL, 2),
-  (503, 51, '发送消息', 'chat:message:add', 'BUTTON', NULL, NULL, 3),
-  (404, 41, '创建行程', 'itinerary:plan:add', 'BUTTON', NULL, NULL, 4),
-  (504, 32, '创建预订', 'order:booking:add', 'BUTTON', NULL, NULL, 1),
-  (505, 32, '查询预订', 'order:booking:query', 'BUTTON', NULL, NULL, 2);
+INSERT IGNORE INTO sys_permission (parent_id, name, code, resource_type, path, icon, sort)
+VALUES (NULL, '智能体对话', 'chat', 'MENU', '/chat', 'message', 5);
+INSERT IGNORE INTO sys_permission (parent_id, name, code, resource_type, path, icon, sort)
+SELECT id, '会话管理', 'chat:session', 'MENU', '/chat/sessions', 'message', 1
+  FROM sys_permission WHERE code = 'chat';
+INSERT IGNORE INTO sys_permission (parent_id, name, code, resource_type, sort)
+SELECT parent.id, child.name, child.code, 'BUTTON', child.sort
+  FROM (
+    SELECT 'chat:session' AS parent_code, '查询会话' AS name, 'chat:session:query' AS code, 1 AS sort
+    UNION ALL SELECT 'chat:session', '查询消息', 'chat:message:query', 2
+    UNION ALL SELECT 'chat:session', '发送消息', 'chat:message:add', 3
+  ) AS child
+  JOIN sys_permission parent ON parent.code = child.parent_code;
 
--- Keep the super administrator complete after adding new permission rows.
-INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
-SELECT r.id, p.id
-  FROM sys_role r
-  JOIN sys_permission p ON p.id IN (50, 51, 32, 501, 502, 503, 404, 504, 505)
- WHERE r.code = 'SUPER_ADMIN';
-
--- A tourist receives only the six explicitly listed business permissions.
 INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
 SELECT r.id, p.id
   FROM sys_role r
   JOIN sys_permission p ON p.code IN (
-    'chat:session:query',
-    'chat:message:query',
-    'chat:message:add',
-    'itinerary:plan:add',
-    'order:booking:add',
-    'order:booking:query'
+    'itinerary', 'itinerary:plan', 'itinerary:plan:query',
+    'itinerary:plan:add', 'itinerary:plan:update', 'itinerary:plan:export',
+    'order:add', 'order:query', 'comment:add', 'order:seckill',
+    'chat', 'chat:session', 'chat:session:query', 'chat:message:query', 'chat:message:add',
+    'order:booking:add', 'order:booking:query'
   )
  WHERE r.code = 'TOURIST';
+
+INSERT IGNORE INTO sys_role_permission (role_id, permission_id)
+SELECT r.id, p.id
+  FROM sys_role r
+  JOIN sys_permission p ON p.code IN (
+    'itinerary:plan:add', 'itinerary:plan:export', 'order:add',
+    'order:query', 'comment:add', 'order:seckill',
+    'chat', 'chat:session', 'chat:session:query', 'chat:message:query', 'chat:message:add'
+  )
+ WHERE r.code = 'SUPER_ADMIN';
