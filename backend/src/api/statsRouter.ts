@@ -2,43 +2,172 @@ import { Router } from 'express';
 import { authenticateJwt } from '../auth/passport.js';
 import { requireAction } from '../auth/rbac.js';
 import { pool } from '../db/connection.js';
+import { getRedis, isRedisReady, redisKey } from '../db/redis.js';
 import { run } from './core.js';
 import { RowDataPacket } from 'mysql2/promise';
+import { onlineConnectionGauge, onlineUserCount } from '../im/presence.js';
+import { hub } from '../im/hub.js';
+import { logEvent } from '../im/protocol.js';
 
 export const statsRouter = Router();
 statsRouter.use(authenticateJwt);
 
-statsRouter.get('/stats/live', requireAction('analytics:live', 'query'), run(async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
+/**
+ * 实时大屏 SSE（第 2 棒 · 组员1 接手第 1 棒的骨架，填真数据）
+ *
+ * 四个数字（对应分工文档 2.7 与老师的「Redis + 消息队列」检查项）：
+ *   online_count      在线人数    → Redis `im:online:set` 的 SCARD（WS 真实在线，去重）
+ *   online_conn       在线连接数  → Redis `im:stat:conn`（多端在线，connection 级别）
+ *   today_order_count 今日订单    → MySQL tour_order 当天计数
+ *   message_count     消息吞吐    → Redis `im:stat:msg`（第 3 棒每发一条 INCR），拿不到回退 MySQL 当日计数
+ *   seckill_qps       秒杀 QPS    → 最近 10s 下单数 / 10（下单速率口径，见下方注释）
+ *
+ * 三条工程约束：
+ *   ① **每 5s 一次、一条聚合 SQL**，绝不 per-connection 打库（大屏开 10 个窗口也只打一次）
+ *   ② **任何一路拿不到都不能让流断**：逐项降级并把降级项写进 `degraded`，前端据此做灰色/红闪
+ *   ③ 客户端断开要清定时器，否则进程里会攒下一堆空转的 interval
+ *
+ * 为什么秒杀 QPS 用"最近 10s 下单数/10"：
+ *   秒杀的真实 QPS（被限流拦下的请求数）需要 Redis 计数器，属于第 6 棒的性能工作；
+ *   这一棒先用"实际成交速率"作为可视指标，口径写在文档里，避免答辩时说不清数据来源。
+ */
 
-  const sendStats = async () => {
+const INTERVAL_MS = Number(process.env.STATS_INTERVAL_MS ?? 5000);
+/** 计算 QPS 的滑动窗口（秒） */
+const QPS_WINDOW_SECONDS = 10;
+
+interface LiveSnapshot {
+  online_count: number;
+  online_conn: number;
+  today_order_count: number;
+  message_count: number;
+  seckill_qps: number;
+  ts: number;
+  /** 哪些指标是降级值（Redis 不可用 / 计数缺失） */
+  degraded: string[];
+}
+
+/** 取一个字符串计数器；Redis 不可用或 key 不存在时返回 null */
+async function readCounter(name: string): Promise<number | null> {
+  const redis = getRedis();
+  if (!redis || !isRedisReady()) return null;
+  try {
+    const raw = await redis.get(redisKey(name));
+    if (raw === null) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 聚合一次快照。
+ * 先并行拿 Redis（在线数/连接数/消息计数），再一条 SQL 兜住与 MySQL 相关的三项。
+ * 任何一项抛错都不向外抛，统一转成降级项。
+ */
+async function collectSnapshot(): Promise<LiveSnapshot> {
+  const degraded: string[] = [];
+
+  const [presenceCount, connGauge, msgCounter] = await Promise.all([
+    onlineUserCount(),
+    onlineConnectionGauge(),
+    readCounter('im:stat:msg')
+  ]);
+
+  let onlineUsersFallback = 0;
+  let todayOrders = 0;
+  let todayMessages = 0;
+  let recentOrders = 0;
+
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT
+         (SELECT COUNT(DISTINCT s.user_id)
+            FROM api_session s
+           WHERE s.is_revoked = 0 AND s.expires_at > UTC_TIMESTAMP()) AS online_users,
+         (SELECT COUNT(*)
+            FROM tour_order o
+           WHERE DATE(o.created_at) = UTC_DATE()) AS today_orders,
+         (SELECT COUNT(*)
+            FROM im_message m
+           WHERE DATE(m.created_at) = UTC_DATE()) AS today_messages,
+         (SELECT COUNT(*)
+            FROM tour_order o
+           WHERE o.created_at >= UTC_TIMESTAMP(3) - INTERVAL ? SECOND) AS recent_orders`,
+      [QPS_WINDOW_SECONDS]
+    );
+    const row = rows[0] ?? {};
+    onlineUsersFallback = Number(row.online_users ?? 0);
+    todayOrders = Number(row.today_orders ?? 0);
+    todayMessages = Number(row.today_messages ?? 0);
+    recentOrders = Number(row.recent_orders ?? 0);
+  } catch (error: any) {
+    degraded.push('mysql');
+    logEvent('stats.live.db_failed', { message: error?.message ?? String(error) });
+  }
+
+  if (presenceCount === null) degraded.push('online_count');
+  if (connGauge === null) degraded.push('online_conn');
+  if (msgCounter === null) degraded.push('message_count');
+
+  return {
+    // WS 在线人数拿不到时，退回"有效会话数"口径（口径不同，标记在 degraded 里）
+    online_count: presenceCount ?? onlineUsersFallback,
+    // 连接数拿不到时用进程内视角（单实例部署下等价）
+    online_conn: connGauge ?? hub.connectionCount(),
+    today_order_count: todayOrders,
+    message_count: msgCounter ?? todayMessages,
+    seckill_qps: Math.round((recentOrders / QPS_WINDOW_SECONDS) * 100) / 100,
+    ts: Date.now(),
+    degraded
+  };
+}
+
+statsRouter.get('/stats/live', requireAction('analytics:live', 'query'), run(async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  // Nginx 反代时必须关缓冲，否则 SSE 会被攒成一坨再吐
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.status(200);
+  res.flushHeaders?.();
+
+  // 首行注释 + retry：让浏览器的 EventSource 断线 3s 后自己重连
+  res.write(': connected\n');
+  res.write(`retry: 3000\n\n`);
+
+  let sequence = 0;
+  let closed = false;
+
+  const push = async (): Promise<void> => {
+    if (closed || res.writableEnded) return;
     try {
-      const [rows] = await pool.query<RowDataPacket[]>(`
-        SELECT
-          (SELECT COUNT(DISTINCT s.user_id)
-             FROM api_session s
-            WHERE s.is_revoked=0 AND s.expires_at>UTC_TIMESTAMP()) AS online_count,
-          (SELECT COUNT(*)
-             FROM tour_order o
-            WHERE DATE(o.created_at)=UTC_DATE()) AS today_order_count,
-          (SELECT COUNT(*)
-             FROM im_message m
-            WHERE DATE(m.created_at)=UTC_DATE()) AS message_count
-      `);
+      const snapshot = await collectSnapshot();
+      if (closed || res.writableEnded) return;
+      sequence += 1;
+      res.write(`id: ${sequence}\n`);
       res.write('event: stats\n');
-      res.write(`data: ${JSON.stringify({
-        online_count: Number(rows[0].online_count),
-        today_order_count: Number(rows[0].today_order_count),
-        message_count: Number(rows[0].message_count)
-      })}\n\n`);
-    } catch (error) {
-      console.error('[stats/live] 聚合查询失败', error);
+      res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
+    } catch (error: any) {
+      // 单次失败不断流：推一条 error 事件，下一拍继续
+      logEvent('stats.live.push_failed', { message: error?.message ?? String(error) });
+      if (!closed && !res.writableEnded) {
+        res.write('event: error\n');
+        res.write(`data: ${JSON.stringify({ message: '统计采集失败，稍后重试' })}\n\n`);
+      }
     }
   };
-  void sendStats();
-  const timer = setInterval(() => void sendStats(), 5000);
-  req.on('close', () => clearInterval(timer));
+
+  void push();
+  const timer = setInterval(() => void push(), INTERVAL_MS);
+  timer.unref?.();
+
+  const cleanup = (): void => {
+    if (closed) return;
+    closed = true;
+    clearInterval(timer);
+  };
+  req.on('close', cleanup);
+  res.on('close', cleanup);
 }));

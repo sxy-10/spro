@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import { app } from './app.js';
 import { secret } from './api/core.js';
 import { cleanupExpiredRateLimits } from './api/core.js';
@@ -5,15 +6,37 @@ import { startStockExpiryJob } from './api/stock.js';
 import { reconcileSeckillStock, warmUpAllSeckillStock } from './api/stockCache.js';
 import { startSeckillConsumer, getQueueStats } from './mq/consumer.js';
 import { waitForRedis } from './db/redis.js';
+import { attachWs } from './im/wsServer.js';
+import { startPresenceJanitor } from './im/presence.js';
+import { logEvent } from './im/protocol.js';
 
 secret();
 
-const server = app.listen(Number(process.env.PORT) || 3001, () => console.log('Travel Agent API started'));
+/* ------------------------------------------------------------------ *
+ * 第 2 棒改动：由 app.listen 改为 http.createServer(app) + attachWs
+ *
+ * 原因：WS 与 HTTP 必须共用一个 3001 端口（分工文档 §2「端口」决策），
+ *      而 express 的 app.listen 内部自己建了 server，拿不到句柄去挂 upgrade 事件。
+ *      这里显式建 server，先 attachWs 再 listen，顺序不能反 ——
+ *      反了的话启动瞬间进来的 upgrade 请求会因为没监听器而被直接销毁。
+ * ------------------------------------------------------------------ */
+const server = createServer(app);
+const wsServer = attachWs(server);
+
+server.listen(Number(process.env.PORT) || 3001, () => {
+  console.log('Travel Agent API started');
+  logEvent('im.ws.listening', {
+    port: Number(process.env.PORT) || 3001,
+    path: '/v1/im/ws'
+  });
+});
 server.requestTimeout = 30000;
 server.headersTimeout = 15000;
 
 const stopStockExpiry = startStockExpiryJob();
 const stopSeckillConsumer = startSeckillConsumer();
+// 在线状态清理：清掉"进程被 kill 后遗留在 im:online:set 里"的僵尸用户
+const stopPresenceJanitor = startPresenceJanitor();
 
 /* ------------------------------------------------------------------ *
  * 启动预热：等 Redis 连上再刷库存
@@ -67,6 +90,9 @@ reconcileTimer.unref();
 server.on('close', () => {
   stopStockExpiry();
   stopSeckillConsumer();
+  stopPresenceJanitor();
   clearInterval(rateLimitCleanupTimer);
   clearInterval(reconcileTimer);
+  // 给所有 WS 连接发 4005 再关，客户端据此不再重试（换进程重启才有意义）
+  void wsServer.close();
 });
