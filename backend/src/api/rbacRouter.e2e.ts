@@ -147,8 +147,8 @@ async function ensureDemoAccounts(): Promise<void> {
   check('游客可创建会话并写入首条消息', createdChat.status, 201);
   const chatHistory = await call(touristToken, `/chat/sessions/${createdChat.body.data.session_id}/messages`);
   check('游客可读取新会话历史', [chatHistory.status, chatHistory.body.data.total], [200, 1]);
-  check('游客具备 IM 会话查询权限（骨架返回 501）',
-    (await call(touristToken, '/im/conversations')).status, 501);
+  check('游客具备 IM 会话查询权限',
+    (await call(touristToken, '/im/conversations')).status, 200);
   check('游客只获得前三项 IM 权限', [
     ['im:session:query', 'im:message:send', 'im:message:query']
       .every((code) => touristPerms.body.data.buttons.some((button: any) => button.code === code)),

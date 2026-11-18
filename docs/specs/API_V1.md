@@ -49,7 +49,7 @@ PUT `/users/{id}` 完整资料字段为 nickname、avatar_url（可 null）、de
 | POST | `/im/messages/{id}/read` | `im:message:send` | 校验会话成员 |
 | GET | `/im/conversations/{id}/unread` | `im:message:query` | 校验会话成员 |
 
-除 `GET /im/conversations/{id}/messages` 仅以 SQL 读取已有消息外，接口暂时返回 501；消息发送服务明确抛出 not implemented。实时统计 `GET /stats/live` 返回 SSE 占位数据，每 5 秒推送一次；真实统计留待后续阶段实现。
+即时通讯接口已实现：会话与成员管理、消息发送、历史消息读取、已读游标及未读数均落库并校验会话归属。写接口使用幂等键和请求签名约束，重复的 `client_msg_id` 不会重复生成消息。实时统计 `GET /stats/live` 每 5 秒查询当前有效登录会话、今日订单数和今日即时消息数并通过 SSE 推送。
 
 ## 部署及验证边界
 

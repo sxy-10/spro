@@ -1,7 +1,7 @@
 /**
  * 数据库与配置体检（只读，不建表、不改数据）
  *
- * 作用：回答「我到底有没有按顺序执行过 01/04/05/06/08」这个问题，
+ * 作用：回答「我到底有没有按顺序执行过 01/04/05/06/08/11/12」这个问题，
  *      并把「缺哪一段、下一条命令是什么」直接打印出来。
  *
  * 运行：cd backend && npm run db:check
@@ -51,6 +51,14 @@ const SCRIPT_TABLES: { file: string; tables: string[] }[] = [
   {
     file: '08_rbac_complete.sql',
     tables: ['sys_audit_log']
+  },
+  {
+    file: '11_im.sql',
+    tables: ['im_conversation', 'im_participant', 'im_message', 'im_device', 'im_read_cursor']
+  },
+  {
+    file: '12_im_perm.sql',
+    tables: ['sys_permission']
   }
 ];
 
@@ -131,7 +139,7 @@ async function checkDatabase(): Promise<boolean> {
     );
     const existing = new Set(rows.map((row) => String(row.name)));
 
-    console.log('\n=== 3. 五段脚本的执行情况 ===');
+    console.log('\n=== 3. 数据库脚本的执行情况 ===');
     let allTables = true;
     for (const script of SCRIPT_TABLES) {
       const missing = script.tables.filter((table) => !existing.has(table));
