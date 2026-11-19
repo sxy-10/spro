@@ -4,6 +4,12 @@
 > 结果：**全部通过**（反代通、限流生效、503 可见）
 > 本文记录执行过程中的所有偏差、踩坑与调整，供复盘和答辩使用。
 
+> **配置归属说明（2026-11-19 合并时补）**
+> 本文描述的是**阶段二「双端口」实验配置**（8080 无限流当基线 / 8088 限流 20r/s，超额回 503），
+> 该配置存档于 `docs/reports/nginx-benchmark-双端口限流.conf`（**非正式配置**，仅供压测复现）。
+> 仓库正式配置 `deploy/nginx/nginx.conf` 已由**阶段六**接管（单端口 8080、按接口分桶限流、超额回 429、JSON 错误体），
+> 两者机制不同，复现本文的压测数据必须用存档文件，别用正式配置。
+
 ---
 
 ## 一、最终可用状态（可直接复制）
@@ -11,11 +17,11 @@
 ### 目录布局
 
 ```text
-E:\colledge\three\软件工程\spro\spro\deploy\nginx\
-    └─ nginx.conf                     ← 存档版（仓库内，交付/diff 用）
+E:\colledge\three\软件工程\spro\spro\docs\reports\nginx-benchmark-双端口限流.conf
+    └─ 阶段二实验配置存档（双端口 8080/8088，压测复现用；正式配置是 deploy\nginx\nginx.conf）
 
 E:\colledge\three\softwareprojects\testall\      ← 运行目录（nginx prefix）
-    ├─ nginx.conf                     ← 运行版（从存档版复制）
+    ├─ nginx.conf                     ← 运行版（从上面存档复制）
     ├─ logs\
     │   ├─ nginx.pid
     │   ├─ spro_access.log
@@ -32,7 +38,7 @@ nginx 可执行文件在 `D:\waimai\nginx-1.20.2\nginx.exe`（不在 PATH 里）
 cd "D:/waimai/nginx-1.20.2" && ./nginx.exe -p "E:/colledge/three/softwareprojects/testall" -c nginx.conf
 
 # ② 改完配置：先复制，再测语法，最后 reload（顺序不能乱）
-cp "E:/colledge/three/软件工程/spro/spro/deploy/nginx/nginx.conf" "E:/colledge/three/softwareprojects/testall/nginx.conf"
+cp "E:/colledge/three/软件工程/spro/spro/docs/reports/nginx-benchmark-双端口限流.conf" "E:/colledge/three/softwareprojects/testall/nginx.conf"
 cd "D:/waimai/nginx-1.20.2" && ./nginx.exe -p "E:/colledge/three/softwareprojects/testall" -c nginx.conf -t
 cd "D:/waimai/nginx-1.20.2" && ./nginx.exe -p "E:/colledge/three/softwareprojects/testall" -c nginx.conf -s reload
 
@@ -223,14 +229,14 @@ A=4,845 / A=5,477 / B=6,041 —— B 依然略高，**排除预热**。
 
 **现象**：诊断过程把 `testall/nginx.conf` 改成了 `rate=1r/m`、`burst=0`，其中 `burst=0` 那次 reload 失败，运行中的仍是 `1r/m + burst=40` 的中间态。
 
-**解决**：从仓库存档版（`deploy/nginx/nginx.conf`）**整份覆盖**回去，再 reload，最后用 `grep` 核对两行参数：
+**解决**：从存档版（`docs/reports/nginx-benchmark-双端口限流.conf`）**整份覆盖**回去，再 reload，最后用 `grep` 核对两行参数：
 ```
 18:    limit_req_zone ... rate=20r/s;
 58:    limit_req  zone=spro_rate burst=40 nodelay;
 ```
 并确认 8080/8088 都返回 200。
 
-**教训**：诊断性修改一定要**改副本 + 明确还原步骤**；存档版（`deploy/nginx/nginx.conf`，入库）和运行版（`testall/nginx.conf`，本机）分离，正是为了让"一键还原"成为可能。
+**教训**：诊断性修改一定要**改副本 + 明确还原步骤**；存档版（`docs/reports/nginx-benchmark-双端口限流.conf`，入库）和运行版（`testall/nginx.conf`，本机）分离，正是为了让"一键还原"成为可能。
 
 ---
 
@@ -289,4 +295,4 @@ server.keepAliveTimeout = 65_000;  // 必须大于 nginx keepalive_timeout(60s)
 - [x] 18 条用例表转成正式文档 → `docs/reports/全链路联调记录-阶段五.md`
 - [ ] 自检清单打勾
 - [ ] 答辩提纲
-- [x] 验收前把 `nginx.conf` 拷进仓库 `deploy/nginx/`，`联调记录` 拷进 `docs/reports/`（2026-11-19 已完成）
+- [x] 验收前把 `nginx.conf` 拷进仓库 `deploy/nginx/`，`联调记录` 拷进 `docs/reports/`（2026-11-19 已完成；合并时 `deploy/nginx/nginx.conf` 让位给阶段六正式版，本文配置转为 `docs/reports/nginx-benchmark-双端口限流.conf` 存档）
