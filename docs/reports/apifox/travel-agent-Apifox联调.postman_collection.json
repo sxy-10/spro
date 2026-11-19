@@ -1,0 +1,278 @@
+{
+  "info": {
+    "_postman_id": "b7f1c2d3-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+    "name": "travel-agent 联调 7 接口",
+    "description": "阶段五 Apifox 联调用集合（Postman v2.1 格式，Apifox：项目设置 → 导入数据 → Postman Collection 直接导入）。\n\n**内置自动化（集合级前置脚本，无需手动配）：**\n1. 所有请求自动补 `Idempotency-Key`（每次随机，≥8 字符，不会被 zod 拦 10001）；\n2. 登录态下的写请求自动补 `X-Timestamp / X-Nonce / X-Signature`（HMAC-SHA256，密钥=当前 token，签名原文=METHOD\\n路径\\n时间戳\\n随机数\\nsha256(body)，与 frontend/src/lib/http.ts 完全一致）；\n3. 登录接口后置脚本自动把 token 写入环境变量，其他接口用 {{token}} 引用。\n\n**注意：**\n- 分页参数是 `page` + `size`（不是 page_size，zod strict 会拒）；\n- plans 的日期要完整 ISO 时间 `2026-12-01T00:00:00Z`；\n- 测试 /v1/roles 双角色：登录接口改 mobile（13800000001 超管 → 期望 200；13800000002 社管 → 期望 403），密码统一 Passw0rd!23；\n- POST /v1/plans 会真调 DeepSeek 生成行程，响应需 7s+ 属正常。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "travel-agent"
+  },
+  "auth": null,
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "/* ===== 1. Idempotency-Key：每次随机，>=8 字符 ===== */",
+          "const idem = 'apifox-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);",
+          "pm.request.headers.upsert({ key: 'Idempotency-Key', value: idem });",
+          "",
+          "/* ===== 2. 登录态写请求：自动补 HMAC 签名（与后端 core.ts 校验算法一致） ===== */",
+          "const token = pm.environment.get('token');",
+          "const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(pm.request.method) !== -1;",
+          "if (token && isWrite) {",
+          "  const ts = new Date().toISOString();",
+          "  const nonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);",
+          "  const bodyRaw = (pm.request.body && pm.request.body.raw) ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+          "  const CryptoJS = require('crypto-js');",
+          "  const digest = CryptoJS.SHA256(bodyRaw).toString(CryptoJS.enc.Hex);",
+          "  const path = pm.request.url.getPath();",
+          "  const message = [pm.request.method, path, ts, nonce, digest].join('\\n');",
+          "  const sign = CryptoJS.HmacSHA256(message, token).toString(CryptoJS.enc.Hex);",
+          "  pm.request.headers.upsert({ key: 'X-Timestamp', value: ts });",
+          "  pm.request.headers.upsert({ key: 'X-Nonce', value: nonce });",
+          "  pm.request.headers.upsert({ key: 'X-Signature', value: sign });",
+          "  console.log('已自动签名:', path, ts, nonce);",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:3001", "type": "string" },
+    { "key": "token", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1-连通性冒烟 GET /health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "health"]
+        },
+        "description": "无鉴权连通性冒烟。期望 200 {\"code\":0,\"message\":\"ok\",\"data\":{\"status\":\"ok\"}}。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('健康检查 200', () => { pm.response.to.have.status(200); });",
+              "pm.test('code=0', () => { pm.expect(pm.response.json().code).to.eql(0); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2-登录 POST /auth/login（自动存 token）",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"mobile\":\"13800000001\",\"password\":\"Passw0rd!23\"}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "auth", "login"]
+        },
+        "description": "body 用 mobile（不是 phone）+ password（≥8 位）。账号口径：13800000001 超管 / 13800000002 社管 / 13800000003 游客，密码统一 Passw0rd!23。\n\n后置脚本已自动把 data.token 写入环境变量 token，后续接口 {{token}} 直接引用。\n\n⚠️ 测 /v1/roles 双角色时：改 mobile 重发本接口即可切换角色。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('登录 200', () => { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.test('返回 token', () => { pm.expect(json.data).to.have.property('token'); });",
+              "if (json && json.data && json.data.token) {",
+              "  pm.environment.set('token', json.data.token);",
+              "  console.log('✅ token 已写入环境变量（当前账号 user_id=' + json.data.user_id + '）');",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3-路线列表 GET /routes（公开分页）",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/v1/routes?page=1&size=10",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "routes"],
+          "query": [
+            { "key": "page", "value": "1", "description": "页码，1-100" },
+            { "key": "size", "value": "10", "description": "每页条数，1-100（后端参数是 size，不是 page_size！）" }
+          ]
+        },
+        "description": "公开接口无需 token。⚠️ 后端 zod 是 strict 校验，分页参数为 page + size；多传 page_size 会被 10001 参数格式错误拦掉。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('路线列表 200', () => { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.test('返回列表结构', () => {",
+              "  pm.expect(json.data).to.have.property('list');",
+              "  pm.expect(json.data).to.have.property('total');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4-创建计划 POST /plans（Bearer+幂等+HMAC）",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"destination\":\"昆明\",\"start_date\":\"2026-12-01T00:00:00Z\",\"end_date\":\"2026-12-03T00:00:00Z\",\"budget\":\"1000-5000\",\"tags\":[\"休闲\"]}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/plans",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "plans"]
+        },
+        "description": "三件套：Bearer {{token}} + Idempotency-Key（脚本自动随机）+ HMAC 签名（脚本自动算，密钥=token）。\n\n日期必须是完整 ISO 时间（YYYY-MM-DD 会被 zod 拦）；行程 1-30 天；会真调 DeepSeek 生成行程，响应 7s+ 属正常。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('创建计划 2xx', () => { pm.expect(pm.response.code).to.be.oneOf([200, 201]); });",
+              "if (pm.response.code >= 400) { console.log('失败响应:', pm.response.text()); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5-秒杀下单 POST /seckill/1",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"date\":\"2026-12-01\",\"people\":1}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/seckill/1",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "seckill", "1"]
+        },
+        "description": "Bearer {{token}} + Idempotency-Key（脚本自动）。body 为 YYYY-MM-DD 日期 + 人数（1-5）。\n\n⚠️ 前提：Redis 有库存 key，否则一律 sold_out：\ndocker exec redis redis-cli set \"stock:1:2026-12-01\" 10 EX 86400\n\n期望 202 {\"status\":\"queued\",\"req_id\":...}，把 req_id 复制给下一个接口轮询。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('秒杀受理 202', () => { pm.response.to.have.status(202); });",
+              "const json = pm.response.json();",
+              "if (json && json.data && json.data.req_id) {",
+              "  pm.environment.set('reqId', json.data.req_id);",
+              "  console.log('✅ req_id 已写入环境变量，可直接发接口 6 轮询');",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6-秒杀结果轮询 GET /seckill/result/:reqId",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/seckill/result/{{reqId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "seckill", "result", "{{reqId}}"]
+        },
+        "description": "Bearer {{token}}。接口 5 会自动把 req_id 写入环境变量 {{reqId}}，本接口直接发送即可。\n\n轮询口径：1s × 10 次，pending → 最终 success（带 order_id）或 sold_out。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "console.log('当前结果:', JSON.stringify(json.data));",
+              "pm.test('轮询接口 200', () => { pm.response.to.have.status(200); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7-角色列表 GET /roles（超管200/社管403）",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/roles",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "roles"]
+        },
+        "description": "RBAC 鉴权验收：用超管 token 期望 200（4 角色：TOURIST/AGENCY_ADMIN/SUPER_ADMIN/AGENCY_STAFF）；用社管 token 期望 403 / 20013 权限不足。\n\n切换角色方式：回到接口 2，把 mobile 改成 13800000002（社管）重发（token 自动覆盖），再回本接口发送。"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "if (pm.response.code === 200) {",
+              "  pm.test('超管可见角色列表', () => {",
+              "    pm.expect(json.data).to.not.be.empty;",
+              "  });",
+              "  console.log('角色数:', Array.isArray(json.data) ? json.data.length : Object.keys(json.data));",
+              "} else if (pm.response.code === 403) {",
+              "  pm.test('社管被正确拒绝 403', () => {",
+              "    pm.expect(json.code).to.eql(20013);",
+              "  });",
+              "} else {",
+              "  pm.test('期望 200 或 403', () => { pm.expect(pm.response.code).to.be.oneOf([200, 403]); });",
+              "}"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
