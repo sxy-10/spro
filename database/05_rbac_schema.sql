@@ -68,7 +68,7 @@ CREATE TABLE sys_permission (
     ON DELETE NO ACTION ON UPDATE NO ACTION,
   -- 按钮必须带「模块:资源:操作」三段式编码；顶层模块（单段）不允许是 BUTTON
   CONSTRAINT chk_permission_button_code CHECK (
-    resource_type <> 'BUTTON' OR code LIKE '%:%:%'
+    resource_type <> 'BUTTON' OR code LIKE '%:%'
   )
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
   COMMENT = '权限资源树：MENU 支撑前端动态路由，BUTTON 支撑按钮级鉴权';

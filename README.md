@@ -65,7 +65,7 @@ npx tsx src/server.ts          # API 监听 http://127.0.0.1:3001
 ### 4. Web 前端（纯静态，零构建）
 
 ```bash
-cd frontend/prototype
+cd prototype
 node -e "<任意静态服务>"        # 或 npx serve / http-server，根目录即本目录
 # 打开 http://127.0.0.1:8080/login.html
 ```

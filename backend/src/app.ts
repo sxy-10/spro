@@ -5,8 +5,12 @@ import compression from 'compression';
 import { randomUUID } from 'node:crypto';
 import { api } from './api/router.js';
 import { seckillRouter } from './api/seckillRouter.js';
-import { ApiError, errors } from './api/core.js';
+import { ApiError, errors, reply, run } from './api/core.js';
+import { getQueueStats } from './mq/consumer.js';
+import { redisStats } from './db/redis.js';
 import passport from './auth/passport.js';
+import { imRouter } from './api/imRouter.js';
+import { statsRouter } from './api/statsRouter.js';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -53,7 +57,28 @@ app.use((req, _res, next) => {
   next();
 });
 app.use(passport.initialize());
+/**
+ * 阶段六新增：队列与 Redis 的可观测性接口。
+ *
+ * 为什么放在 /v1 下而不是 /health：/health 被 api.test.ts 断言为 {status:'ok'}，
+ * 这里单开一条路径，既能给答辩现场演示"积压多少、死信多少"，也不会破坏既有契约。
+ *
+ * 只暴露聚合数字，不含任何业务数据，所以不需要登录（内网/本机演示用）。
+ */
+app.get('/v1/health/queue', run(async (_req, res) => {
+  const [queue, redis] = await Promise.all([getQueueStats(), redisStats()]);
+  reply(res, { queue, redis });
+}));
+
+app.get('/v1/health', (_req, res) => res.status(200).json({
+  code: 0,
+  message: 'ok',
+  data: { status: 'ok' },
+  trace_id: res.locals.traceId
+}));
 app.use('/v1', api);
 app.use('/v1', seckillRouter);
+app.use('/v1', imRouter);
+app.use('/v1', statsRouter);
 app.use((_req, _res, next) => next(new ApiError(404,20016,'接口不存在')));
 app.use(errors);

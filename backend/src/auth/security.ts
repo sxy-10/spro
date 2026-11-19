@@ -1,16 +1,28 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import Redis from 'ioredis';
 import { RowDataPacket } from 'mysql2/promise';
 import { pool } from '../db/connection.js';
+import { bumpLoginFailure, clearLoginFailures, peekLoginFailure } from '../db/redis.js';
 import { ApiError } from '../api/core.js';
 
 /**
  * 安全认证基础套件：密码加盐慢哈希、恒定时间防时序攻击比对与防暴力破解频控锁定
- * 
+ *
  * 核心特性：
  * 1. bcrypt 慢哈希运算（默认 12 轮 Salt，抗 GPU 算力碰撞）
  * 2. 恒定时间比对防时序攻击（Timing Attack Defense）
  * 3. 输错 5 次账号锁定 15 分钟（Redis 优先 + MySQL/内存 自动平滑降级）
+ *
+ * 阶段六修复（三条都是真事故级别的）：
+ * ① **不再自建 Redis 连接**：原来这里 `new Redis(...)` 开了第二个客户端，
+ *    而且 key 是裸的 `login_fail_count:手机号`，没有走 REDIS_KEY_PREFIX ——
+ *    等于绕过了 redis.ts 自己定的"key 必须带前缀"铁律，多人共用一个 Redis 时会互相污染。
+ *    现在统一用 db/redis.ts 的客户端与 redisKey()。
+ * ② **计数原子化**：原来是 INCR + EXPIRE 两条命令，中间崩了就留下"无 TTL 的永久计数"，
+ *    该账号从此永远提示"已被锁定"，只能人工删 key。现在走 login_fail.lua，
+ *    自增与过期时间在同一次执行里完成，并会自愈历史脏 key。
+ * ③ **key 不再明文放手机号**：改成 sha256(手机号) 的前 32 位，
+ *    Redis 的 MONITOR / SLOWLOG / RDB 里不会出现用户隐私。
  */
 
 // 慢哈希盐轮数：12 轮（单次耗时约 80~120ms）
@@ -26,45 +38,12 @@ export const LOCKOUT_DURATION_SECONDS = 15 * 60;
 // 本地内存防线（当 Redis 与 MySQL 均不可用/未建表时的三级保底容灾缓存）
 const inMemoryLockoutStore = new Map<string, { count: number; expiresAt: number }>();
 
-// 初始化 Redis 客户端连接（优先连接本地或环境变量配置的 Redis，连接失败时自动优雅降级，不阻塞服务）
-let redisClientInstance: Redis | null = null;
-let isRedisAvailable = false;
-
-try {
-  const configuredRedisHost = process.env.REDIS_HOST || '127.0.0.1';
-  const configuredRedisPort = Number(process.env.REDIS_PORT) || 6379;
-  const configuredRedisPassword = process.env.REDIS_PASSWORD || undefined;
-
-  redisClientInstance = new Redis({
-    host: configuredRedisHost,
-    port: configuredRedisPort,
-    password: configuredRedisPassword,
-    lazyConnect: true,
-    maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
-    enableOfflineQueue: false,
-    connectTimeout: 1000
-  });
-
-  redisClientInstance.on('connect', () => {
-    isRedisAvailable = true;
-    console.log('[Security] Redis 登录防刷锁定服务连接成功');
-  });
-
-  redisClientInstance.on('error', () => {
-    isRedisAvailable = false;
-  });
-
-  // 尝试握手连接，若无本地 Redis 服务则不阻塞进程退出
-  redisClientInstance.connect().then(() => {
-    // @ts-ignore
-    redisClientInstance?.connector?.stream?.unref?.();
-  }).catch(() => {
-    isRedisAvailable = false;
-  });
-} catch {
-  isRedisAvailable = false;
-}
+/**
+ * 锁定计数的 key：用 sha256 而不是明文手机号。
+ * 加 'login_fail:' 前缀便于在 redis-cli 里 SCAN 出来排查。
+ */
+const lockoutKeyOf = (identifier: string): string =>
+  `login_fail:${createHash('sha256').update(identifier).digest('hex').slice(0, 32)}`;
 
 /**
  * 慢哈希加盐生成密文（注册或重置密码时调用）
@@ -78,7 +57,7 @@ export async function hashPassword(plainPassword: string): Promise<string> {
 /**
  * 恒定时间比对密码（严格防时序攻击）
  * 无论目标用户在数据库中是否存在，必须完整执行一次耗时恒定的 bcrypt.compare 计算
- * 
+ *
  * @param plainPassword 提交的明文密码
  * @param actualHashFromDatabase 数据库中查出的密码哈希（若用户不存在则为 null/undefined）
  * @returns 是否完全匹配
@@ -100,34 +79,22 @@ export async function verifyPasswordConstantTime(
 /**
  * 检查指定账号（手机号/用户名）是否处于输错锁定状态
  * 规则：连续输错 5 次，锁定 15 分钟
- * 
+ *
  * @param userIdentifier 手机号或用户名标识
  */
 export async function checkLoginLockout(userIdentifier: string): Promise<void> {
-  const lockoutCacheKey = `login_fail_count:${userIdentifier}`;
+  const key = lockoutKeyOf(userIdentifier);
 
-  if (isRedisAvailable && redisClientInstance) {
-    try {
-      const currentFailedAttemptsString = await redisClientInstance.get(lockoutCacheKey);
-      const failedAttemptsCount = Number(currentFailedAttemptsString) || 0;
-
-      if (failedAttemptsCount >= MAXIMUM_LOGIN_ATTEMPTS) {
-        const remainingTtlSeconds = await redisClientInstance.ttl(lockoutCacheKey);
-        const remainingMinutes = Math.max(1, Math.ceil(remainingTtlSeconds / 60));
-        throw new ApiError(
-          429,
-          20014,
-          `密码连续输错超过 ${MAXIMUM_LOGIN_ATTEMPTS} 次，账号已被安全锁定，请在 ${remainingMinutes} 分钟后再试`
-        );
-      }
-      return;
-    } catch (redisError: any) {
-      if (redisError instanceof ApiError) throw redisError;
-      // Redis 异常时平滑进入 MySQL 降级检查
-    }
+  // 1) Redis 优先（一次 EVAL：读计数 + 读 TTL + 顺手修复无 TTL 的脏 key）
+  const state = await peekLoginFailure(key, LOCKOUT_DURATION_SECONDS);
+  if (state && state.count >= MAXIMUM_LOGIN_ATTEMPTS) {
+    const remainingMinutes = Math.max(1, Math.ceil((state.ttlSeconds > 0 ? state.ttlSeconds : LOCKOUT_DURATION_SECONDS) / 60));
+    throw new ApiError(429, 20014,
+      `密码连续输错超过 ${MAXIMUM_LOGIN_ATTEMPTS} 次，账号已被安全锁定，请在 ${remainingMinutes} 分钟后再试`);
   }
+  if (state) return;
 
-  // 降级方案：从数据库 api_rate_limit 表检查，若表不存在则平滑降级至内存存储
+  // 2) Redis 不可用：降级查 api_rate_limit 表，若表不存在再降级到内存
   try {
     const [rows] = await pool.query<RowDataPacket[]>(
       `SELECT hits, TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), expires_at) AS remain_seconds
@@ -138,11 +105,8 @@ export async function checkLoginLockout(userIdentifier: string): Promise<void> {
 
     if (rows.length > 0 && rows[0].hits >= MAXIMUM_LOGIN_ATTEMPTS) {
       const remainingMinutes = Math.max(1, Math.ceil((rows[0].remain_seconds || 60) / 60));
-      throw new ApiError(
-        429,
-        20014,
-        `密码连续输错超过 ${MAXIMUM_LOGIN_ATTEMPTS} 次，账号已被安全锁定，请在 ${remainingMinutes} 分钟后再试`
-      );
+      throw new ApiError(429, 20014,
+        `密码连续输错超过 ${MAXIMUM_LOGIN_ATTEMPTS} 次，账号已被安全锁定，请在 ${remainingMinutes} 分钟后再试`);
     }
   } catch (dbError: any) {
     if (dbError instanceof ApiError) throw dbError;
@@ -150,38 +114,27 @@ export async function checkLoginLockout(userIdentifier: string): Promise<void> {
     const mem = inMemoryLockoutStore.get(userIdentifier);
     if (mem && mem.expiresAt > Date.now() && mem.count >= MAXIMUM_LOGIN_ATTEMPTS) {
       const remainingMinutes = Math.max(1, Math.ceil((mem.expiresAt - Date.now()) / 60000));
-      throw new ApiError(
-        429,
-        20014,
-        `密码连续输错超过 ${MAXIMUM_LOGIN_ATTEMPTS} 次，账号已被安全锁定，请在 ${remainingMinutes} 分钟后再试`
-      );
+      throw new ApiError(429, 20014,
+        `密码连续输错超过 ${MAXIMUM_LOGIN_ATTEMPTS} 次，账号已被安全锁定，请在 ${remainingMinutes} 分钟后再试`);
     }
   }
 }
 
 /**
  * 记录一次登录失败
- * 计数自增，并重置 15 分钟失效期
- * 
+ * 计数自增，并保证这个计数一定有过期时间（不会永久锁死账号）
+ *
  * @param userIdentifier 手机号或用户名标识
+ * @returns 当前累计失败次数
  */
 export async function recordLoginFailure(userIdentifier: string): Promise<number> {
-  const lockoutCacheKey = `login_fail_count:${userIdentifier}`;
-  let recordedAttemptsCount = 1;
+  const key = lockoutKeyOf(userIdentifier);
 
-  if (isRedisAvailable && redisClientInstance) {
-    try {
-      recordedAttemptsCount = await redisClientInstance.incr(lockoutCacheKey);
-      if (recordedAttemptsCount === 1) {
-        await redisClientInstance.expire(lockoutCacheKey, LOCKOUT_DURATION_SECONDS);
-      }
-      return recordedAttemptsCount;
-    } catch {
-      // Redis 写入失败时降级走 MySQL
-    }
-  }
+  // 1) Redis：INCR + EXPIRE 在同一个 Lua 里，天然原子
+  const state = await bumpLoginFailure(key, LOCKOUT_DURATION_SECONDS);
+  if (state) return state.count;
 
-  // 降级方案：MySQL api_rate_limit 表，若未初始化则写内存
+  // 2) 降级：MySQL api_rate_limit 表，若未初始化则写内存
   try {
     await pool.query(
       `INSERT INTO api_rate_limit (bucket_hash, hits, expires_at)
@@ -205,19 +158,9 @@ export async function recordLoginFailure(userIdentifier: string): Promise<number
 
 /**
  * 登录成功后，清除该账号的历史失败锁定记录
- * 
- * @param userIdentifier 手机号或用户名标识
  */
 export async function clearLoginLockout(userIdentifier: string): Promise<void> {
-  const lockoutCacheKey = `login_fail_count:${userIdentifier}`;
-
-  if (isRedisAvailable && redisClientInstance) {
-    try {
-      await redisClientInstance.del(lockoutCacheKey);
-    } catch {
-      // 忽略缓存清理异常
-    }
-  }
+  await clearLoginFailures(lockoutKeyOf(userIdentifier));
 
   // 清理数据库降级表中的记录与内存
   try {
@@ -229,4 +172,15 @@ export async function clearLoginLockout(userIdentifier: string): Promise<void> {
     // 忽略未建表异常
   }
   inMemoryLockoutStore.delete(userIdentifier);
+}
+
+/**
+ * 恒定时间字符串比较（给需要比较校验码/签名的地方用）。
+ * 保留导出是为了让业务层不必各自手写 timingSafeEqual 的长度保护。
+ */
+export function constantTimeEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }

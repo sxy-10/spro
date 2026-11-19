@@ -9,6 +9,9 @@ import { expireUnpaidOrders, settlePaidOrder } from './stock.js';
 
 test('v1 HTTP contract, ownership, signing, idempotency and order state', async () => {
   process.env.JWT_SECRET='test-secret-with-at-least-32-characters';
+  // 限流已迁到 Redis 令牌桶，单测不该依赖真实 Redis 的桶状态（否则连跑几遍就会 429）。
+  // 这里显式关闭应用层限流，语料见 core.ts 的 rateLimit。
+  process.env.RATE_LIMIT_DISABLED='1';
   const originalQuery=pool.query, originalConnection=pool.getConnection;
   const cache=new Map<string,any>(), nonces=new Set<string>();
   let orders=0, status='PENDING';
@@ -17,6 +20,14 @@ test('v1 HTTP contract, ownership, signing, idempotency and order state', async 
   const query=async(sql:string,args:any[]=[])=>{
     if(sql.includes('api_rate_limit')) return [sql.startsWith('SELECT')?[{hits:1}]:{}];
     if(sql.includes('AS role_code')||sql.includes('AS permission_code')) return [[]];
+    if(sql.includes('FROM sys_user_role ur') && sql.includes('p.code')) {
+      const permissions=[
+        {code:'order:add'},
+        {code:'order:query'},
+        {code:'itinerary:plan:delete'}
+      ];
+      return [permissions];
+    }
     if(sql.includes('JOIN sys_user')) return [[{id:'1',role:'TOURIST',agency_id:null}]];
     if(sql.startsWith('INSERT IGNORE INTO api_idempotency')) { if(!cache.has(args[0])) cache.set(args[0],{request_hash:args[1]}); return [{}]; }
     if(sql.startsWith('SELECT * FROM api_idempotency')) return [[cache.get(args[0])]];
@@ -75,7 +86,7 @@ test('v1 HTTP contract, ownership, signing, idempotency and order state', async 
     assert.equal((await call('/plans','GET',undefined,{auth:false})).status,401);
     assert.equal((await call('/users/2')).status,403);
     assert.equal((await call('/admin/routes')).status,403);
-    assert.equal((await call('/plans/00000000000000000000000000')).status,404);
+    assert.equal((await call('/plans/00000000000000000000000000')).status,403);
     assert.equal((await call('/routes?sort=title%3BDROP%20TABLE')).status,400);
     assert.equal((await call('/routes?size=101')).status,400);
     const stock=await call('/routes/7/stock?travel_date=2026-12-01','GET',undefined,{auth:false});

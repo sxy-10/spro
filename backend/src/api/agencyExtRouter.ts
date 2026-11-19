@@ -722,7 +722,7 @@ agencyExt.put('/admin/settings', requireAction('agency:settings', 'update'), run
   await write(req, res, async (conn) => {
     await conn.query(
       `UPDATE travel_agency SET agency_name=?, contact_name=?, contact_phone=?, intro=?,
-         notify_prefs=COALESCE(JSON_MERGE_PATCH(COALESCE(notify_prefs,'{}'), CAST(? AS JSON)), notify_prefs)
+         notify_prefs=COALESCE(JSON_MERGE_PATCH(COALESCE(notify_prefs,'{}'), JSON_EXTRACT(?, '$')), notify_prefs)
        WHERE id=?`,
       [body.agency_name, body.contact_name ?? null, body.contact_phone ?? null, body.intro ?? null,
         body.notify_prefs ? JSON.stringify(body.notify_prefs) : null, user.agency_id]);

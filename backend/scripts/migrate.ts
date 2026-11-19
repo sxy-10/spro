@@ -19,12 +19,13 @@ const DB_NAME = process.env.DB_NAME || 'travel_agent_db';
 const SCRIPT_DIR = path.resolve(process.cwd(), '../database');
 const FILES = [
   '01_schema.sql', '02_seed.sql', '04_api_v1.sql', '05_rbac_schema.sql', '06_route_stock.sql',
-  '07_dict.sql', '07_web_extension.sql', '08_rbac_complete.sql'
+  '07_dict.sql', '07_web_extension.sql', '08_rbac_complete.sql', '10_audit_log.sql',
+  '11_im.sql', '12_im_perm.sql'
 ];
 // 03_sample_queries.sql 为只读样例查询，不在迁移序列中
 // 09_stock_version.sql（秒杀乐观锁）单独处理：其使用 ADD COLUMN IF NOT EXISTS，
 // MySQL 8 不支持该语法，改为先查 information_schema 再逐条补列。
-const BENIGN = [/ER_DB_CREATE_EXISTS/i, /ER_DUP_FIELDNAME/i, /ER_DUP_ENTRY/i, /already exists/i];
+const BENIGN = [/ER_DB_CREATE_EXISTS/i, /ER_DUP_FIELDNAME/i, /duplicate column name/i, /ER_DUP_ENTRY/i, /already exists/i];
 
 /** MariaDB 等旧版本兼容：utf8mb4_0900_ai_ci 为 MySQL 8 独有排序规则 */
 const sanitize = (sql: string) =>
@@ -86,6 +87,14 @@ const ensureOrderStockColumns = async (admin: mysql.Connection) => {
   }
 };
 
+const tableExists = async (admin: mysql.Connection, table: string): Promise<boolean> => {
+  const [rows] = await admin.query<mysql.RowDataPacket[]>(
+    'SELECT 1 FROM information_schema.tables WHERE table_schema=? AND table_name=? LIMIT 1',
+    [DB_NAME, table]
+  );
+  return rows.length > 0;
+};
+
 const run = async () => {
   if (DB_PASSWORD === undefined || process.env.DB_PASSWORD === undefined) {
     console.error('[migrate] 未读取到 DB_PASSWORD（.env 缺失或未加载），请先配置 backend/.env');
@@ -94,7 +103,25 @@ const run = async () => {
   if (!DB_PASSWORD) console.warn('[migrate] DB_PASSWORD 为空（本机 root 无密码场景）');
   const admin = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD, multipleStatements: true });
   try {
+    const collation = process.env.DB_COMPAT_COLLATION === '0' ? 'utf8mb4_0900_ai_ci' : 'utf8mb4_general_ci';
+    await admin.query(`CREATE DATABASE IF NOT EXISTS ?? DEFAULT CHARACTER SET utf8mb4 COLLATE ${collation}`, [DB_NAME]);
+    await admin.query(`USE ??`, [DB_NAME]);
     for (const file of FILES) {
+      if (file === '01_schema.sql' && await tableExists(admin, 'sys_user')) {
+        console.log(`[migrate] ${file} 检测到现有用户表，跳过破坏性初始化`);
+        continue;
+      }
+      if (file === '02_seed.sql' && await tableExists(admin, 'sys_user')) {
+        const [users] = await admin.query<mysql.RowDataPacket[]>('SELECT COUNT(*) AS count FROM sys_user');
+        if (Number(users[0].count) > 0) {
+          console.log(`[migrate] ${file} 检测到已有用户数据，跳过演示数据导入`);
+          continue;
+        }
+      }
+      if (file === '05_rbac_schema.sql' && await tableExists(admin, 'sys_role')) {
+        console.log(`[migrate] ${file} 检测到现有角色表，跳过会重建授权数据的初始化`);
+        continue;
+      }
       const sql = sanitize(fs.readFileSync(path.join(SCRIPT_DIR, file), 'utf8'));
       try {
         await admin.query(sql);
