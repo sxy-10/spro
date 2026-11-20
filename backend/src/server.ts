@@ -5,6 +5,7 @@ import { cleanupExpiredRateLimits } from './api/core.js';
 import { startStockExpiryJob } from './api/stock.js';
 import { reconcileSeckillStock, warmUpAllSeckillStock } from './api/stockCache.js';
 import { startSeckillConsumer, getQueueStats } from './mq/consumer.js';
+import { startImNotifyConsumer, stopImNotifyConsumer } from './mq/imNotifyConsumer.js';
 import { waitForRedis } from './db/redis.js';
 import { attachWs } from './im/wsServer.js';
 import { startPresenceJanitor } from './im/presence.js';
@@ -35,6 +36,8 @@ server.headersTimeout = 15000;
 
 const stopStockExpiry = startStockExpiryJob();
 const stopSeckillConsumer = startSeckillConsumer();
+// IM 离线通知消费者（组员3 · 第 3 棒）：读 im:notify，离线参与者 INCR im:offline:{uid}
+startImNotifyConsumer();
 // 在线状态清理：清掉"进程被 kill 后遗留在 im:online:set 里"的僵尸用户
 const stopPresenceJanitor = startPresenceJanitor();
 
@@ -90,6 +93,7 @@ reconcileTimer.unref();
 server.on('close', () => {
   stopStockExpiry();
   stopSeckillConsumer();
+  stopImNotifyConsumer();
   stopPresenceJanitor();
   clearInterval(rateLimitCleanupTimer);
   clearInterval(reconcileTimer);

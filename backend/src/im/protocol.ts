@@ -310,6 +310,10 @@ export function pongFrame(clientTs: number | undefined): PongFrame {
   return { v: PROTOCOL_VERSION, t: 'pong', ts: clientTs ?? 0, serverTs: Date.now() };
 }
 
+export function ackOkFrame(clientMsgId: string, seq: number): AckOkFrame {
+  return { v: PROTOCOL_VERSION, t: 'ack_ok', clientMsgId, seq };
+}
+
 export function errorFrame(code: string, msg: string): ErrorFrame {
   return { v: PROTOCOL_VERSION, t: 'error', code, msg };
 }

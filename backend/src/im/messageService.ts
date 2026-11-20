@@ -7,6 +7,7 @@ export async function listSince(conversationId: number, userId: number, sinceId:
     `SELECT CAST(m.id AS CHAR) AS message_id,
             CAST(m.conversation_id AS CHAR) AS conversation_id,
             CAST(m.sender_id AS CHAR) AS sender_id,
+            m.seq,
             m.client_msg_id, m.content_type, m.content, m.status, m.created_at
        FROM im_message m
        JOIN im_participant p ON p.conversation_id=m.conversation_id

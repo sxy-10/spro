@@ -48,6 +48,7 @@ export async function publishSeckill(msg: SeckillMessage): Promise<string> {
   if (!messageId) throw new Error('xadd_failed');
   console.log(JSON.stringify({ event: 'seckill.msg.published', reqId: msg.reqId, id: messageId }));
   return messageId;
+
 }
 
 /** 把处理失败的消息丢进死信队列（带重试次数与原因，方便事后重放/排查） */
@@ -72,4 +73,31 @@ export async function publishToDlq(msg: SeckillMessage, error: string, attempts 
     // 连死信都写不进去只能落日志，不能影响主流程
     console.log(JSON.stringify({ event: 'seckill.dlq.failed', reqId: msg.reqId, message: dlqError?.message }));
   }
+}
+
+/* ---------------- IM 离线通知（组员3 · 第 3 棒） ---------------- */
+
+export const IM_STREAM = 'im:notify';
+
+export interface ImNotifyMessage {
+  convId: number;
+  seq: number;
+  preview: string;
+}
+
+/** 会话全员离线时投递一条离线通知，消费端按参与者逐个 INCR 离线计数。
+ *  边界：只写 im:notify，绝不碰 seckill:stream。 */
+export async function publishImNotify(msg: ImNotifyMessage): Promise<string> {
+  const redis = getRedis();
+  if (!redis) throw new Error('redis_unavailable');
+  const messageId = await redis.xadd(
+    redisKey(IM_STREAM),
+    'MAXLEN', '~', STREAM_MAXLEN,
+    '*',
+    'convId', String(msg.convId),
+    'seq', String(msg.seq),
+    'preview', msg.preview.slice(0, 100)
+  );
+  if (!messageId) throw new Error('xadd_failed');
+  return messageId;
 }

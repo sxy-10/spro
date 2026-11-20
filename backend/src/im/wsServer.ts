@@ -11,6 +11,10 @@ import { readCachedUser } from '../auth/sessionCache.js';
 import type { AuthenticatedUserPayload } from '../auth/passport.js';
 import { hub, type WsConnection } from './hub.js';
 import { markOffline, markOnline, touch } from './presence.js';
+import { send as sendMessage, listSince } from './messageService.js';
+import { publishImNotify } from '../mq/producer.js';
+import { incrBy } from '../db/redis.js';
+import { sendToConv } from './hub.js';
 import {
   AUTH_TIMEOUT_MS,
   HEARTBEAT_MS,
@@ -20,6 +24,7 @@ import {
   WS_PATH,
   WS_REQUIRED_PERMISSION,
   WsCloseCode,
+  ackOkFrame,
   authOkFrame,
   encodeFrame,
   errorFrame,
@@ -351,17 +356,127 @@ export function attachWs(server: HttpServer): WsServerHandle {
           return;
         }
 
-        case 'msg':
-        case 'ack':
+        case 'msg': {
+          // 第 3 棒：发号+落库（messageService.send 内含幂等预检）+ ACK + 广播 + 离线 MQ 通知
+          // 注意：ws.on('message') 回调是同步的，异步逻辑必须包进 IIFE，不能直接 await
+          void (async () => {
+            const connIdNum = Number(frame.convId);
+            const userIdNum = Number(connection.state.userId);
+            const db = await pool.getConnection();   // 行锁 FOR UPDATE 必须在事务里
+            let sent;
+            try {
+              await db.beginTransaction();
+              sent = await sendMessage(db, connIdNum, userIdNum, frame.clientMsgId, frame.content);
+              await db.commit();
+            } catch (err) {
+              await db.rollback();
+              db.release();
+              logEvent('im.ws.msg_fail', { convId: connIdNum, err: String(err) });
+              send(errorFrame('msg_failed', '消息发送失败，请重试'));
+              return;
+            }
+            db.release();
+
+            // 1) 先给发送者回 ACK（客户端最关心"存上没有，seq 是几"）
+            send(ackOkFrame(frame.clientMsgId, sent.seq));
+
+            // 2) 大屏计数（失败不影响主流程）
+            void incrBy('im:stat:msg', 1).catch(() => {});
+
+            // 3) 广播给会话内其他人（排除发送者自己）——传帧对象，不是 encodeFrame 字符串
+            let delivered = 0;
+            try {
+              delivered = await sendToConv(
+                connIdNum,
+                {
+                  v: PROTOCOL_VERSION,
+                  t: 'msg',
+                  convId: String(sent.conversation_id),
+                  seq: sent.seq,
+                  clientMsgId: sent.client_msg_id,
+                  senderId: sent.sender_id,
+                  type: sent.content_type,
+                  content: sent.content,
+                  ts: new Date(sent.created_at).getTime()
+                },
+                { excludeUserId: userIdNum }
+              );
+            } catch (err) {
+              logEvent('im.ws.broadcast_fail', { convId: connIdNum, err: String(err) });
+            }
+
+            // 4) 全员离线 → MQ 离线通知（消费者按参与者 INCR im:offline:{uid}）
+            if (delivered === 0) {
+              void publishImNotify({
+                convId: connIdNum,
+                seq: sent.seq,
+                preview: sent.content.slice(0, 30)
+              }).catch((err) => logEvent('im.notify.publish_fail', { err: String(err) }));
+            }
+
+            logEvent('im.ws.msg_sent', { convId: connIdNum, seq: sent.seq, delivered });
+          })();
+          return;
+        }
+
+        case 'ack': {
+          // 已读游标：GREATEST 只前进不后退；两表同事务，避免游标不一致
+          void (async () => {
+            const ackSeq = Number(frame.seq);
+            const ackConvId = Number(frame.convId);
+            const ackUserId = Number(connection.state.userId);
+            const db = await pool.getConnection();
+            try {
+              await db.beginTransaction();
+              await db.query(
+                `UPDATE im_participant SET last_read_seq=GREATEST(last_read_seq,?)
+                 WHERE conversation_id=? AND user_id=?`,
+                [ackSeq, ackConvId, ackUserId]
+              );
+              await db.query(
+                `INSERT INTO im_read_cursor (conversation_id, user_id, last_read_seq)
+                 VALUES (?,?,?)
+                 ON DUPLICATE KEY UPDATE last_read_seq=GREATEST(last_read_seq,VALUES(last_read_seq)), last_read_at=CURRENT_TIMESTAMP(3)`,
+                [ackConvId, ackUserId, ackSeq]
+              );
+              await db.commit();
+              logEvent('im.ws.ack', { convId: ackConvId, seq: ackSeq });
+            } catch (err) {
+              await db.rollback();
+              logEvent('im.ws.ack_fail', { err: String(err) });
+              send(errorFrame('ack_failed', '已读游标写入失败'));
+            } finally {
+              db.release();
+            }
+          })();
+          return;
+        }
+
         case 'sync': {
-          // TODO(第3棒 · 组员3)：msg 走发号+落库+广播，ack 走已读游标，sync 走增量对账
-          // 第 2 棒只保证"帧能进来、能回错误帧"，不做半成品落库，避免和第 3 棒的实现打架。
-          logEvent('im.ws.frame_pending', {
-            connId: connection.state.connId,
-            userId: String(connection.state.userId),
-            type: frame.t
-          });
-          send(errorFrame('not_implemented', `${frame.t} 由第 3 棒实现`));
+          // 离线同步：重放 lastSeq 之后的消息（≤200 条内存过滤，量大再改 SQL 按 seq 过滤）
+          void (async () => {
+            const lastSeq = Number(frame.lastSeq ?? 0);
+            const rows = await listSince(
+              Number(frame.convId),
+              Number(connection.state.userId),
+              0
+            );
+            const replay = rows.filter((r) => Number(r.seq) > lastSeq);
+            for (const r of replay) {
+              send({
+                v: PROTOCOL_VERSION,
+                t: 'msg',
+                convId: String(r.conversation_id),
+                seq: Number(r.seq),
+                clientMsgId: String(r.client_msg_id),
+                senderId: String(r.sender_id),
+                type: r.content_type,
+                content: r.content,
+                ts: new Date(r.created_at as string).getTime()
+              });
+            }
+            logEvent('im.ws.sync_done', { convId: frame.convId, lastSeq, replayed: replay.length });
+          })();
           return;
         }
 
