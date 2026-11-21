@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'node:path';
 
 /**
  * 组员4（阶段三·前端状态流与网络层）
@@ -14,13 +15,19 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    resolve: {
+      alias: {
+        '@shared': path.resolve(__dirname, 'shared')
+      }
+    },
     server: {
       host: '0.0.0.0',
       port: 5173,
       proxy: {
         '/v1': {
           target: proxyTarget,
-          changeOrigin: true
+          changeOrigin: true,
+          ws: true
         }
       }
     }

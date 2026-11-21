@@ -32,7 +32,7 @@ export type FrontTabKey = Exclude<ActiveTabKey, 'admin'>;
 export interface TabDescriptor {
   key: FrontTabKey;
   label: string;
-  icon: 'home' | 'calendar' | 'sparkles' | 'compass' | 'user';
+  icon: 'home' | 'calendar' | 'sparkles' | 'compass' | 'user' | 'message';
 }
 
 /** 展示元数据（文案、图标、顺序）的唯一真相源，权限只决定「取哪几项」 */
@@ -58,7 +58,7 @@ export const ALL_TAB_KEYS: readonly FrontTabKey[] = [
  * 下钻页：不出现在底部导航，但由「计划」等业务入口进入（例如点创建计划 → 智能体页）。
  * Tab 可见性 ≠ 页面可达性，否则游客点「创建计划」会被守卫弹回首页，核心闭环走不通。
  */
-export const DRILLDOWN_SCREEN_KEYS: readonly FrontTabKey[] = ['agent', 'itinerary', 'explore'];
+export const DRILLDOWN_SCREEN_KEYS: readonly FrontTabKey[] = ['agent', 'itinerary', 'explore', 'consult'];
 
 /**
  * 管理类按钮权限码：命中才说明是 B 端 / 平台方视角。
@@ -87,6 +87,7 @@ const FRONT_MENU_ALIASES: Record<FrontTabKey, readonly string[]> = {
   plan: ['/app/plan', 'app:plan', 'c:plan', 'tab:plan', 'page:plan'],
   itinerary: ['/app/itinerary', 'app:itinerary', 'c:itinerary', 'tab:itinerary'],
   agent: ['/app/agent', 'app:agent', 'c:agent', 'tab:agent'],
+  consult: ['/app/consult', 'app:consult', 'c:consult', 'tab:consult', 'im:session:query'],
   explore: ['/app/explore', 'app:explore', 'c:explore', 'tab:explore'],
   profile: ['/app/profile', 'app:profile', 'c:profile', 'tab:profile']
 };
@@ -137,11 +138,21 @@ export const deriveVisibleTabs = (
   const granted = grantedFrontTabs(permissions);
   // 后端明确下发了前台 Tab 菜单 → 严格按菜单（「我的」始终保留作登录/退出入口）
   if (granted.size > 0) {
-    return TAB_CATALOG.filter((tab) => tab.key === 'profile' || granted.has(tab.key));
+    const list = TAB_CATALOG.filter((tab) => tab.key === 'profile' || granted.has(tab.key));
+    if (hasAnyPermissionCode(permissions, ['im:session:query', 'im:session']) && !list.some((t) => t.key === 'consult')) {
+      const consultTab = TAB_CATALOG.find((t) => t.key === 'consult');
+      if (consultTab) {
+        const exploreIdx = list.findIndex((t) => t.key === 'explore');
+        if (exploreIdx >= 0) list.splice(exploreIdx, 0, consultTab);
+        else list.push(consultTab);
+      }
+    }
+    return list;
   }
   // 否则按权限视角：有管理类权限看全部，纯 C 端权限（含游客）只看 2 个
   const keys: readonly FrontTabKey[] = hasConsoleAccess(permissions) ? ALL_TAB_KEYS : PUBLIC_TAB_KEYS;
-  return TAB_CATALOG.filter((tab) => keys.includes(tab.key));
+  const keySet = new Set<FrontTabKey>(keys);
+  return TAB_CATALOG.filter((tab) => keySet.has(tab.key));
 };
 
 /**

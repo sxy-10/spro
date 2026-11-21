@@ -15,6 +15,85 @@
   --theme-shadow-card: 0 6px 20px rgba(22, 60, 30, 0.06);
 }
 
+/* 智能体页面双模切换胶囊栏（AI 行程判官 ⟷ 人工专属顾问） */
+.agent-mode-switcher-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #edf1ed;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.agent-mode-btn {
+  flex: 1;
+  max-width: 175px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid #e1e7e2;
+  background: #f4f7f4;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4b6352;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+}
+
+.agent-mode-btn:hover {
+  background: #eaf1eb;
+  color: #17241a;
+}
+
+.agent-mode-btn.active {
+  background: #216e39;
+  border-color: #216e39;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(33, 110, 57, 0.25);
+}
+
+.live-online-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+}
+
+.agent-mode-btn.active .live-online-dot {
+  background: #4ade80;
+  box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.4);
+}
+
+.btn-back-to-ai {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  border: 1px solid #d2ded5;
+  background: #ffffff;
+  color: #216e39;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-back-to-ai:hover {
+  background: #eef7f1;
+}
+
+.quick-suggestion-item.highlight-consult {
+  background: #f1f8f3;
+  border-color: #b8dcbf;
+}
+
 .btn-deepseek-badge {
   display: inline-flex;
   align-items: center;
@@ -3577,4 +3656,356 @@ input:checked + .toggle-slider:before {
   background: #f0fdf4;
   border: 1px solid #bbf7d0;
   border-radius: 8px;
+}
+
+/* ===== 组员4（阶段4·IM）：游客端咨询聊天（ConsultChatScreen） ===== */
+.consult-chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #f7faf8;
+  overflow: hidden;
+  position: relative;
+}
+
+.consult-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #eaf0eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  flex-shrink: 0;
+}
+
+.header-advisor-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.advisor-avatar-box {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #eef7f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  font-size: 20px;
+}
+
+.advisor-status-dot {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+}
+
+.advisor-status-dot.online {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.advisor-status-dot.polling {
+  background: #f59e0b;
+}
+
+.advisor-status-dot.offline {
+  background: #9ca3af;
+}
+
+.advisor-text-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.advisor-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.advisor-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #17281d;
+  margin: 0;
+}
+
+.badge-advisor-tag {
+  background: #eef8f1;
+  color: #1a6f33;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid #cce8d4;
+}
+
+.advisor-subline {
+  font-size: 11px;
+}
+
+.status-label.connected {
+  color: #059669;
+  font-weight: 500;
+}
+
+.status-label.polling {
+  color: #d97706;
+}
+
+.status-label.reconnecting {
+  color: #ea580c;
+}
+
+.status-label.disconnected {
+  color: #6b7280;
+}
+
+.conv-id-pill {
+  font-size: 11px;
+  color: #6a7d71;
+  background: #f1f5f2;
+  padding: 3px 8px;
+  border-radius: 10px;
+}
+
+.consult-login-banner {
+  background: #fef3c7;
+  border-bottom: 1px solid #fde68a;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #92400e;
+}
+
+.consult-login-banner strong {
+  display: block;
+  font-size: 12px;
+}
+
+.consult-login-banner p {
+  margin: 2px 0 0;
+  color: #a16207;
+}
+
+.banner-login-btn {
+  background: #d97706;
+  color: #ffffff;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.consult-message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.message-notice-pill {
+  align-self: center;
+  background: rgba(0, 0, 0, 0.04);
+  color: #6b7c70;
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: 12px;
+  margin-bottom: 4px;
+}
+
+.consult-bubble-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.consult-bubble-row.user-row {
+  justify-content: flex-end;
+}
+
+.bubble-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid #e1ebe3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.bubble-avatar.me-avatar {
+  background: #eef7f1;
+}
+
+.bubble-content-wrapper {
+  max-width: 74%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.user-row .bubble-content-wrapper {
+  align-items: flex-end;
+}
+
+.bubble-bubble {
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.advisor-bubble {
+  background: #ffffff;
+  color: #17271c;
+  border: 1px solid #e6eee8;
+  border-top-left-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.user-bubble {
+  background: #1e6b37;
+  color: #ffffff;
+  border-top-right-radius: 4px;
+  box-shadow: 0 2px 6px rgba(30, 107, 55, 0.2);
+}
+
+.bubble-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: #8c9e92;
+}
+
+.msg-status-tag.sending {
+  color: #6b7280;
+}
+
+.msg-status-tag.sent {
+  color: #10b981;
+  font-weight: 500;
+}
+
+.msg-status-tag.failed {
+  color: #ef4444;
+}
+
+.status-retry-btn {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.status-retry-btn:hover {
+  background: #fca5a5;
+  color: #ffffff;
+}
+
+.quick-prompts-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 6px 14px;
+  background: #f3f7f4;
+  border-top: 1px solid #e7ede9;
+  flex-shrink: 0;
+}
+
+.quick-prompts-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-prompt-chip {
+  white-space: nowrap;
+  background: #ffffff;
+  border: 1px solid #dbe6dd;
+  color: #274730;
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.quick-prompt-chip:hover {
+  background: #eef7f0;
+  border-color: #1e6b37;
+  color: #1e6b37;
+}
+
+.consult-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #ffffff;
+  border-top: 1px solid #e7ede9;
+  flex-shrink: 0;
+}
+
+.consult-text-input {
+  flex: 1;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #d0ded4;
+  border-radius: 19px;
+  font-size: 13px;
+  color: #17271c;
+  outline: none;
+  background: #f8faf8;
+}
+
+.consult-text-input:focus {
+  border-color: #1e6b37;
+  background: #ffffff;
+}
+
+.consult-send-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 38px;
+  padding: 0 14px;
+  background: #1e6b37;
+  color: #ffffff;
+  border: none;
+  border-radius: 19px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.consult-send-button:disabled {
+  background: #cfd9d2;
+  cursor: not-allowed;
 }

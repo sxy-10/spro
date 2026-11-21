@@ -23,6 +23,7 @@ import { PlanScreen } from './components/PlanScreen';
 import { ChatScreen } from './components/ChatScreen';
 import { ItineraryScreen } from './components/ItineraryScreen';
 import { ExploreScreen } from './components/ExploreScreen';
+import { ConsultChatScreen } from './components/ConsultChatScreen';
 import { ProfileScreen } from './components/ProfileScreen';
 import { AdminScreen } from './components/AdminScreen';
 import { ExportModal } from './components/ExportModal';
@@ -357,6 +358,8 @@ export default function App() {
             onExperienceJudgeClick={() => handleSendMessage('体验「行程判官」：审查云南5天4晚方案')}
             onResetChat={() => setMessages(defaultChatMessages)}
             isLoading={isGenerating}
+            user={user}
+            onOpenLogin={() => setShowLoginModal(true)}
           />
         );
       case 'itinerary':
@@ -368,6 +371,13 @@ export default function App() {
             onReorderClick={handleReorderItinerary}
             onSaveEdit={handleSaveItineraryEdit}
             isReordering={isReordering}
+          />
+        );
+      case 'consult':
+        return (
+          <ConsultChatScreen
+            user={user}
+            onOpenLogin={() => setShowLoginModal(true)}
           />
         );
       case 'explore':

@@ -87,6 +87,27 @@ imRouter.post('/im/conversations', requireAction('im:conv', 'manage'), run(async
   });
 }));
 
+/** GET /v1/im/poll?convId=1&since=0 —— 长轮询/降级轮询接口（第 4 棒客户端降级兜底） */
+imRouter.get('/im/poll', requireAction('im:message', 'query'), run(async (req, res) => {
+  const convId = Number(id.parse(req.query.convId));
+  const since = Number(req.query.since ?? 0);
+  const userId = Number(res.locals.user.id);
+  await assertParticipant(convId, userId);
+
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT CAST(m.id AS CHAR) AS message_id,
+            CAST(m.conversation_id AS CHAR) AS conversation_id,
+            CAST(m.sender_id AS CHAR) AS sender_id,
+            m.seq,
+            m.client_msg_id, m.content_type, m.content, m.status, m.created_at
+       FROM im_message m
+      WHERE m.conversation_id = ? AND m.seq > ?
+      ORDER BY m.seq ASC LIMIT 100`,
+    [convId, since]
+  );
+  reply(res, rows);
+}));
+
 imRouter.post('/im/conversations/:id/participants', requireAction('im:conv', 'manage'), run(async (req, res) => {
   const conversationId = Number(id.parse(req.params.id));
   const body = z.object({ user_ids: z.array(id).min(1).max(200) }).strict().parse(req.body);

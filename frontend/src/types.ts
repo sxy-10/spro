@@ -1,4 +1,4 @@
-export type ActiveTabKey = 'plan' | 'itinerary' | 'agent' | 'explore' | 'profile' | 'admin';
+export type ActiveTabKey = 'plan' | 'itinerary' | 'agent' | 'consult' | 'explore' | 'profile' | 'admin';
 
 export interface DayActivityItem {
   timeString?: string;
