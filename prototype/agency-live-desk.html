@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>在线客服 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+<style>
+/* ── 在线客服工作台（第 5 棒 LiveDesk 的原型站版）──────────────────── */
+.ld-grid { display: grid; grid-template-columns: 320px 1fr 280px; gap: 14px; align-items: start; }
+@media (max-width: 1100px) { .ld-grid { grid-template-columns: 280px 1fr; } .ld-side { display: none; } }
+.ld-panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-soft); overflow: hidden; }
+.ld-panel-head { padding: 12px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 8px; }
+.ld-panel-head b { font-size: 14px; }
+.ld-panel-head .muted { font-size: 12px; }
+
+/* QQ 式消息列表（无分组页签） */
+.ld-list { max-height: 520px; overflow-y: auto; }
+.ld-conv { position: relative; display: flex; gap: 10px; width: 100%; text-align: left; padding: 11px 12px; border: 0; border-bottom: 1px solid var(--border); background: #fff; cursor: pointer; align-items: flex-start; }
+.ld-conv:hover { background: var(--brand-soft); }
+.ld-conv.active { background: var(--brand-light); }
+.ld-avatar { position: relative; width: 38px; height: 38px; border-radius: 9px; background: var(--brand-light); color: var(--brand-dark); font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex: none; }
+.ld-avatar .ld-dot { position: absolute; right: -2px; bottom: -2px; margin: 0; width: 10px; height: 10px; border: 2px solid #fff; background: #cfd8d2; }
+.ld-avatar .ld-dot.on { background: #1a9e55; box-shadow: none; }
+.ld-dot { width: 9px; height: 9px; border-radius: 50%; background: #cfd8d2; flex: none; }
+.ld-dot.on { background: #1a9e55; box-shadow: 0 0 0 3px rgba(26, 158, 85, .15); }
+.ld-conv-main { flex: 1; min-width: 0; }
+.ld-conv-top { display: flex; align-items: baseline; gap: 6px; }
+.ld-conv-name { font-size: 13.5px; font-weight: 600; color: var(--text); display: flex; gap: 6px; align-items: baseline; flex: 1; min-width: 0; overflow: hidden; }
+.ld-conv-phone { font-size: 11.5px; font-weight: 400; color: var(--text-muted); }
+.ld-conv-time { font-size: 11.5px; color: var(--text-muted); flex: none; }
+.ld-state { font-size: 10.5px; border-radius: 4px; padding: 1px 5px; flex: none; }
+  /* 已结束角标 */
+.ld-state.closed { background: #f1f3f2; color: var(--text-muted); }
+.ld-conv-preview { font-size: 12.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; display: flex; gap: 8px; }
+.ld-unread { position: absolute; right: 10px; bottom: 12px; background: var(--danger); color: #fff; font-size: 11px; border-radius: 10px; padding: 0 6px; min-width: 18px; height: 18px; line-height: 18px; text-align: center; }
+.ld-empty { padding: 26px 16px; font-size: 12.5px; color: var(--text-muted); line-height: 1.8; text-align: center; }
+.ld-load-error { margin: 8px 12px; padding: 8px 10px; background: var(--warn-bg); border-radius: 8px; font-size: 12px; color: var(--warn); }
+
+/* 聊天区 */
+.ld-chat { display: flex; flex-direction: column; min-height: 560px; }
+.ld-chat-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); gap: 10px; flex-wrap: wrap; }
+.ld-chat-title { font-size: 15px; font-weight: 600; }
+.ld-chat-title .cid { font-size: 11.5px; color: var(--text-muted); font-weight: 400; margin-left: 6px; }
+.ld-conn { font-size: 12px; margin-top: 2px; }
+.ld-conn.connected { color: var(--success); }
+.ld-conn.connecting, .ld-conn.reconnecting { color: var(--warn); }
+.ld-conn.disconnected { color: var(--text-muted); }
+.ld-msgs { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); }
+.ld-row { display: flex; }
+.ld-row.mine { justify-content: flex-end; }
+.ld-bubble { max-width: 72%; background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 8px 11px; }
+.ld-row.mine .ld-bubble { background: var(--brand-light); border-color: #cfe4d4; }
+.ld-bubble-text { font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.ld-bubble-meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; display: flex; gap: 8px; justify-content: flex-end; }
+.ld-msg-failed { color: var(--danger); cursor: pointer; }
+.ld-banner { margin: 10px 16px 0; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--warn-bg); color: var(--warn); }
+.ld-banner.error { background: #fdf0ef; color: var(--danger); }
+.ld-banner.sla { background: #fdf0ef; color: var(--danger); }
+.ld-banner .btn { flex: none; }
+
+/* 快捷话术 + 输入 */
+.ld-quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--border); align-items: center; }
+.ld-chip-wrap { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 16px; overflow: hidden; background: #fff; }
+.ld-chip-wrap.shared { border-style: dashed; }
+.ld-chip { border: 0; background: transparent; font-size: 12px; color: var(--text-2); padding: 4px 10px; cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ld-chip:disabled { color: var(--text-muted); cursor: default; }
+.ld-chip-del { border: 0; border-left: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer; padding: 2px 7px; font-size: 13px; }
+.ld-chip-del:hover { color: var(--danger); }
+.ld-quick-add { display: inline-flex; gap: 4px; }
+.ld-quick-add input { border: 1px solid var(--border-strong); border-radius: 16px; font-size: 12px; padding: 4px 10px; width: 150px; }
+.ld-inputbar { display: flex; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--border); }
+.ld-inputbar input { flex: 1; border: 1px solid var(--border-strong); border-radius: 8px; padding: 9px 12px; font-size: 13.5px; }
+.ld-inputbar input:disabled { background: var(--bg); color: var(--text-muted); }
+
+/* 右栏 */
+.ld-side-card { border-bottom: 1px solid var(--border); padding: 11px 14px; }
+.ld-side-card:last-child { border-bottom: 0; }
+.ld-side-row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--text-2); padding: 3px 0; gap: 10px; }
+.ld-side-row span:last-child { text-align: right; color: var(--text); word-break: break-all; }
+.ld-side-row.note span:last-child { color: var(--warn); }
+.ld-text-on { color: var(--success) !important; font-weight: 600; }
+.ld-text-off { color: var(--text-muted) !important; }
+.ld-side-actions { display: flex; flex-direction: column; gap: 7px; }
+.ld-side-actions .btn { width: 100%; justify-content: center; }
+.ld-inline-panel { border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--brand-soft); }
+.ld-inline-panel select, .ld-inline-panel input { border: 1px solid var(--border-strong); border-radius: 6px; padding: 6px 8px; font-size: 12.5px; }
+.ld-rating-avg { display: flex; align-items: baseline; gap: 6px; margin: 4px 0 8px; }
+.ld-rating-avg b { font-size: 26px; color: var(--brand); }
+.ld-rating-bar { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-2); margin-bottom: 4px; }
+.ld-rating-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.ld-rating-track span { display: block; height: 100%; background: var(--accent); }
+.ld-rating-item { font-size: 11.5px; color: var(--text-2); border-top: 1px dashed var(--border); padding-top: 6px; margin-top: 6px; }
+.ld-side-note { font-size: 11.5px; color: var(--text-muted); line-height: 1.8; }
+.mini-btn { border: 1px solid var(--border-strong); background: #fff; border-radius: 7px; font-size: 12.5px; padding: 6px 12px; cursor: pointer; color: var(--text-2); }
+.mini-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.mini-btn.danger { color: var(--danger); border-color: #f3c2c2; }
+.mini-btn:disabled { opacity: .55; cursor: default; }
+.mini-btn.full { width: 100%; }
+</style>
+</head>
+<body>
+<main class="content" id="pageContent">
+  <div class="page-head">
+    <h1>在线客服</h1>
+    <p>游客咨询接待工作台：QQ 式消息列表，全部会话按「最后一条消息」时间倒序，最近的排最前。新会话自动归属当前客服，打开即可查看与回复；15 秒兜底刷新 + WS 实时收发。</p>
+  </div>
+
+  <div class="ld-grid">
+    <!-- 左：消息列表（QQ 式，无分组页签） -->
+    <section class="ld-panel">
+      <div class="ld-panel-head"><b>消息列表</b><span class="muted" id="ld-queue-sub">—</span></div>
+      <div id="ld-load-error"></div>
+      <div class="ld-list" id="ld-list"></div>
+    </section>
+
+    <!-- 中：当前会话 -->
+    <section class="ld-panel ld-chat">
+      <div class="ld-chat-head">
+        <div>
+          <div class="ld-chat-title" id="ld-chat-title">未选择会话</div>
+          <div class="ld-conn disconnected" id="ld-conn">● 未连接</div>
+        </div>
+      </div>
+      <div id="ld-banner-zone"></div>
+      <div class="ld-msgs" id="ld-msgs"><div class="ld-empty">从左侧选择一个会话。</div></div>
+      <div class="ld-quick" id="ld-quick"></div>
+      <div class="ld-inputbar">
+        <input type="text" id="ld-input" placeholder="接入后才能回复" disabled>
+        <button class="btn btn-primary" id="ld-send" type="button" disabled>发送</button>
+      </div>
+    </section>
+
+    <!-- 右：详情 + 操作 + 评分 -->
+    <section class="ld-panel ld-side">
+      <div class="ld-panel-head"><b>会话详情</b></div>
+      <div id="ld-side"></div>
+    </section>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+onWebApi(function () {
+AdminLayout.mount({ role: "agency", active: "live-desk", title: "在线客服", crumb: "经营概览" });
+
+(function () {
+  var api = window.WebApi, SA = window.SharedAuth, U = window.UI;
+  var myId = String((api.me && api.me.id) || "");
+
+  /* ───────── 全局状态 ───────── */
+  var POOL_POLL_MS = 15000, PRESENCE_POLL_MS = 30000, ACTIVE_WINDOW_MS = 90000;
+  /* QQ 式单列表：不分组，全部会话一起排；单坐席、无接待状态 */
+  var S = {
+    convs: [], counters: { pool: 0, mine: 0, closed: 0 }, sla: 120,
+    unread: {}, activeId: "", presence: {}, lastActive: {},
+    quickReplies: [], rating: null,
+    closing: false, closeNote: "",
+    inputText: "", newReply: "", loadError: "", actionError: "", busy: false, replyBusy: false
+  };
+  // 消息仓库：convId -> {list:[{clientMsgId,seq,senderId,content,ts,status}], byClient:{}, maxSeq:0}
+  var store = {};
+  var failTimers = {};
+
+  function esc(s) { return U.esc ? U.esc(s) : String(s == null ? "" : s); }
+  function conv(id) { for (var i = 0; i < S.convs.length; i++) if (String(S.convs[i].conversation_id) === String(id)) return S.convs[i]; return null; }
+  function activeConv() { return conv(S.activeId); }
+  function fmtTime(v) { if (!v) return "—"; var d = new Date(v); return isNaN(d) ? "—" : ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); }
+  function titleOf(row) {
+    if (row.counterpart_name) return row.counterpart_name;
+    if (row.title) return row.title;
+    return (row.conversation_type === "GROUP" ? "群聊 " : "游客 ") + String(row.conversation_no || "").slice(-6);
+  }
+
+  /* ───────── WS 实时通道（协议与 frontend/shared/ws.ts 同一份契约）───────── */
+  var ws = { sock: null, status: "disconnected", attempts: 0, pingTimer: null, reconnectTimer: null };
+  function deviceId() {
+    var d = localStorage.getItem("im_device_id");
+    if (!d) { d = "kfweb-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); localStorage.setItem("im_device_id", d); }
+    return d;
+  }
+  function wsEndpoint() {
+    var base = String((SA.getAuthConfig && SA.getAuthConfig().baseUrl) || "http://127.0.0.1:3001/v1").replace(/\/+$/, "");
+    if (!/\/v1$/.test(base)) base += "/v1";
+    return base.replace(/^http/, "ws") + "/im/ws";
+  }
+  function setWs(status) {
+    ws.status = status;
+    var el = document.getElementById("ld-conn");
+    var map = {
+      connected: ["connected", "● WS 实时在线"],
+      connecting: ["connecting", "● 连接中…"],
+      reconnecting: ["reconnecting", "● 退避重连中…"],
+      disconnected: ["disconnected", "● 未连接（发送走 HTTP）"]
+    };
+    var m = map[status] || map.disconnected;
+    el.className = "ld-conn " + m[0];
+    el.textContent = m[1];
+  }
+  function wsConnect() {
+    var tk = SA.getAccessToken && SA.getAccessToken();
+    if (!tk || ws.sock) return;
+    setWs("connecting");
+    var sock;
+    try { sock = new WebSocket(wsEndpoint() + "?token=" + encodeURIComponent(tk)); } catch (e) { scheduleReconnect(); return; }
+    ws.sock = sock;
+    sock.onopen = function () { sock.send(JSON.stringify({ v: 1, t: "auth", token: tk, deviceId: deviceId(), platform: "WEB" })); };
+    sock.onmessage = function (ev) { try { handleFrame(JSON.parse(ev.data)); } catch (e) { /* 忽略坏帧 */ } };
+    sock.onclose = function (ev) {
+      stopPing(); ws.sock = null;
+      if (ev.code === 4003 || ev.code === 4004) { setWs("disconnected"); toast("实时通道鉴权未通过（" + ev.code + "），发送自动走 HTTP 接口"); return; }
+      scheduleReconnect();
+    };
+    sock.onerror = function () { try { sock.close(); } catch (e) { /* noop */ } };
+  }
+  function scheduleReconnect() {
+    setWs("reconnecting");
+    var steps = [1, 2, 4, 8, 16, 30];
+    var base = steps[Math.min(ws.attempts, steps.length - 1)] * 1000;
+    var delay = Math.max(500, Math.round(base + base * 0.2 * (Math.random() * 2 - 1)));
+    ws.attempts += 1;
+    clearTimeout(ws.reconnectTimer);
+    ws.reconnectTimer = setTimeout(wsConnect, delay);
+  }
+  function startPing() { stopPing(); ws.pingTimer = setInterval(function () { if (ws.sock && ws.sock.readyState === 1) ws.sock.send(JSON.stringify({ v: 1, t: "ping", ts: Date.now() })); }, 30000); }
+  function stopPing() { if (ws.pingTimer) { clearInterval(ws.pingTimer); ws.pingTimer = null; } }
+  function handleFrame(f) {
+    if (f.t === "auth_ok") {
+      ws.attempts = 0; setWs("connected"); startPing();
+      // 重连成功后对当前会话做断线对账
+      if (S.activeId) {
+        var st = store[S.activeId];
+        if (ws.sock && ws.sock.readyState === 1) ws.sock.send(JSON.stringify({ v: 1, t: "sync", convId: S.activeId, lastSeq: st ? st.maxSeq : 0 }));
+        if (st && st.maxSeq > 0) sendAck(S.activeId, st.maxSeq);
+      }
+      return;
+    }
+    if (f.t === "msg") {
+      var convId = String(f.convId);
+      upsertMsg(convId, { clientMsgId: f.clientMsgId, seq: Number(f.seq), senderId: String(f.senderId), content: f.content, ts: f.ts, status: "sent" });
+      if (convId === S.activeId) sendAck(convId, Number(f.seq));
+      else S.unread[convId] = (S.unread[convId] || 0) + 1;
+      S.lastActive[convId] = Date.now();
+      scheduleQueueRefresh(); renderList();
+      if (convId === S.activeId) renderMsgs();
+      return;
+    }
+    if (f.t === "ack_ok") { markSent(f.clientMsgId, Number(f.seq)); return; }
+    if (f.t === "notify") {
+      var cid = String(f.convId);
+      if (cid !== S.activeId) S.unread[cid] = (S.unread[cid] || 0) + 1;
+      S.lastActive[cid] = Date.now();
+      scheduleQueueRefresh(); renderList();
+      return;
+    }
+    if (f.t === "error") toast("WS 错误：" + (f.msg || f.code));
+  }
+  function sendAck(convId, seq) {
+    if (ws.sock && ws.sock.readyState === 1 && seq > 0) ws.sock.send(JSON.stringify({ v: 1, t: "ack", convId: convId, seq: seq }));
+  }
+  /** 新消息到达后节流刷新队列（预览/排序变化），1.5s 内只刷一次 */
+  var queueRefreshTimer = null;
+  function scheduleQueueRefresh() {
+    if (queueRefreshTimer) return;
+    queueRefreshTimer = setTimeout(function () { queueRefreshTimer = null; loadQueue(true); }, 1500);
+  }
+
+  /* ───────── 消息仓库 ───────── */
+  function stOf(convId) { if (!store[convId]) store[convId] = { list: [], byClient: {}, maxSeq: 0 }; return store[convId]; }
+  function upsertMsg(convId, m) {
+    var st = stOf(convId);
+    var exist = m.clientMsgId ? st.byClient[m.clientMsgId] : null;
+    if (exist) {
+      if (m.seq) exist.seq = m.seq;
+      if (m.status) exist.status = m.status;
+      if (m.ts) exist.ts = m.ts;
+    } else {
+      var item = { clientMsgId: m.clientMsgId || ("srv_" + convId + "_" + m.seq), seq: m.seq || 0, senderId: String(m.senderId || ""), content: m.content || "", ts: m.ts || null, status: m.status || "sent" };
+      st.list.push(item);
+      st.byClient[item.clientMsgId] = item;
+    }
+    st.list.sort(function (a, b) { return a.seq - b.seq; });
+    if (m.seq > st.maxSeq) st.maxSeq = m.seq;
+  }
+  function markSent(clientMsgId, seq) {
+    Object.keys(store).forEach(function (cid) {
+      var item = store[cid].byClient[clientMsgId];
+      if (item) { item.status = "sent"; item.seq = seq || item.seq; if (seq > store[cid].maxSeq) store[cid].maxSeq = seq; }
+    });
+    if (failTimers[clientMsgId]) { clearTimeout(failTimers[clientMsgId]); delete failTimers[clientMsgId]; }
+    if (document.getElementById("ld-msgs")) renderMsgs();
+  }
+  function markFailed(clientMsgId) {
+    Object.keys(store).forEach(function (cid) {
+      var item = store[cid].byClient[clientMsgId];
+      if (item) item.status = "failed";
+    });
+    renderMsgs();
+  }
+
+  /* ───────── 数据加载 ───────── */
+  function loadQueue(silent) {
+    // scope=all：单列表拿全部会话；sort=-last_message_at 最近有人说话的排最前（后端同口径兜底）
+    return api.call("/im/agent/queue?scope=all&size=50&sort=-last_message_at", "GET").then(function (res) {
+      S.convs = res.list || [];
+      S.counters = res.counters || { pool: 0, mine: 0, closed: 0 };
+      S.sla = res.sla_seconds || 120;
+      S.convs.forEach(function (row) { S.unread[row.conversation_id] = Number(row.unread_count || 0); });
+      S.loadError = "";
+      if (!conv(S.activeId)) S.activeId = S.convs.length ? String(S.convs[0].conversation_id) : "";
+      renderSub(); renderList(); renderChatHead(); renderMsgs(); renderSide();
+      autoClaimAll(); // 单坐席：新落进来的会话直接默认领，无需手动接入
+      if (!silent) loadPresence();
+    }).catch(function (err) {
+      S.loadError = (err && err.message) || "队列加载失败";
+      renderList(); document.getElementById("ld-load-error").innerHTML = "⚠️ " + esc(S.loadError);
+    });
+  }
+  function loadPresence() {
+    var ids = [];
+    S.convs.forEach(function (row) { if (row.counterpart_id && ids.indexOf(String(row.counterpart_id)) < 0) ids.push(String(row.counterpart_id)); });
+    if (!ids.length) { S.presence = {}; return; }
+    api.call("/im/presence?user_ids=" + ids.join(","), "GET").then(function (res) {
+      var map = {};
+      ((res && res.items) || []).forEach(function (item) { map[String(item.user_id)] = item; });
+      S.presence = map;
+      renderList(); renderSide();
+    }).catch(function () { /* 拿不到在线数据不影响聊天 */ });
+  }
+  function loadQuickReplies() {
+    return api.call("/im/quick-replies", "GET").then(function (rows) { S.quickReplies = Array.isArray(rows) ? rows : []; renderQuick(); }).catch(function () { S.quickReplies = []; });
+  }
+  function loadRating() {
+    return api.call("/im/agent/ratings", "GET").then(function (res) { S.rating = res; renderRating(); }).catch(function () { S.rating = null; });
+  }
+  function loadHistory(convId) {
+    api.call("/im/conversations/" + convId + "/messages?since_id=0", "GET").then(function (res) {
+      var rows = Array.isArray(res) ? res : ((res && res.list) || []);
+      rows.forEach(function (r) {
+        upsertMsg(convId, { clientMsgId: r.client_msg_id, seq: Number(r.seq), senderId: String(r.sender_id), content: r.content, ts: r.created_at, status: "sent" });
+      });
+      var st = store[convId];
+      if (st.maxSeq > 0) sendAck(convId, st.maxSeq);
+      if (String(convId) === String(S.activeId)) renderMsgs();
+    }).catch(function () { /* 未接入的会话服务端拒绝拉历史，正常 */ });
+  }
+
+  /* ───────── 动作 ───────── */
+  function runAction(work, after) {
+    S.busy = true; S.actionError = ""; renderBanner();
+    return work().then(function () {
+      S.busy = false;
+      if (after) after();
+      return loadQueue(true);
+    }).catch(function (err) {
+      S.busy = false;
+      S.actionError = (err && err.message) || "操作失败";
+      renderBanner();
+      return loadQueue(true); // 失败也刷新：可能状态已被别处改变
+    });
+  }
+  // 静默认领：服务端把「客服加入会话参与者」挂在 claim 接口上，这是收发消息的前提。
+  // 单坐席模式下页面对所有进行中的会话自动认领，用户看不到「接入」这个动作。
+  function ensureClaimed(c) {
+    if (!c || c.status === "CLOSED" || c.assignee_id) return Promise.resolve();
+    return api.call("/im/agent/conversations/" + c.conversation_id + "/claim", "POST", {}).then(function () {
+      c.assignee_id = myId; // 本地同步置上，避免重复请求
+    }).catch(function () { /* 已被认领/已结束等情况忽略 */ });
+  }
+  function autoClaimAll() {
+    S.convs.forEach(function (row) { if (row.status === "ACTIVE" && !row.assignee_id) ensureClaimed(row); });
+  }
+  function closeConv(id, note) { runAction(function () { return api.call("/im/agent/conversations/" + id + "/close", "POST", note ? { note: note } : {}); }, function () { S.closing = false; S.closeNote = ""; }); }
+  function reopenConv(id) { runAction(function () { return api.call("/im/agent/conversations/" + id + "/reopen", "POST", {}); }, function () { S.activeId = String(id); }); }
+  function addReply() {
+    var content = (S.newReply || "").trim();
+    if (!content) return;
+    S.replyBusy = true; renderQuick();
+    api.call("/im/quick-replies", "POST", { content: content, category: "我的" }).then(function () {
+      S.newReply = ""; S.replyBusy = false; loadQuickReplies();
+    }).catch(function (err) { S.replyBusy = false; S.actionError = (err && err.message) || "新增话术失败"; renderBanner(); });
+  }
+  function removeReply(id) {
+    S.replyBusy = true;
+    api.call("/im/quick-replies/" + id, "DELETE").then(function () { S.replyBusy = false; loadQuickReplies(); })
+      .catch(function (err) { S.replyBusy = false; toast((err && err.message) || "删除失败"); });
+  }
+
+  /* ───────── 发送（WS 优先，未连接走 HTTP 兜底）───────── */
+  function sendMessage(text, existingId) {
+    var c = activeConv();
+    var trimmed = (text || "").trim();
+    if (!c || !trimmed || c.status === "CLOSED") return;
+    var convId = String(c.conversation_id);
+    var cmid = existingId || ("kf_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9));
+    upsertMsg(convId, { clientMsgId: cmid, seq: 0, senderId: myId, content: trimmed, ts: new Date().toISOString(), status: "sending" });
+    if (!existingId) S.inputText = "";
+    renderMsgs(); renderInput();
+    var viaWs = ws.sock && ws.status === "connected" && ws.sock.readyState === 1;
+    if (viaWs) {
+      ws.sock.send(JSON.stringify({ v: 1, t: "msg", convId: convId, clientMsgId: cmid, type: "TEXT", content: trimmed }));
+      failTimers[cmid] = setTimeout(function () { markFailed(cmid); }, 3000);
+    } else {
+      api.call("/im/messages", "POST", { conversation_id: convId, client_msg_id: cmid, content: trimmed })
+        .then(function (m) { markSent(cmid, Number(m.seq)); })
+        .catch(function (err) { markFailed(cmid); toast((err && err.message) || "发送失败"); });
+    }
+  }
+  function retrySend(clientMsgId) {
+    Object.keys(store).forEach(function (cid) {
+      var item = store[cid].byClient[clientMsgId];
+      if (item) { item.status = "sending"; renderMsgs(); sendMessage(item.content, clientMsgId); }
+    });
+  }
+
+  /* ───────── 渲染 ───────── */
+  function renderSub() {
+    var el = document.getElementById("ld-queue-sub");
+    var active = S.convs.filter(function (r) { return r.status !== "CLOSED"; }).length;
+    el.textContent = active + " 个进行中 · " + (S.convs.length - active) + " 已结束";
+  }
+  function renderList() {
+    var el = document.getElementById("ld-list");
+    document.getElementById("ld-load-error").innerHTML = "";
+    if (!S.convs.length) {
+      el.innerHTML = '<div class="ld-empty">暂无会话。游客在 C 端「咨询」发起对话后会出现在这里。</div>';
+      return;
+    }
+    var html = "";
+    S.convs.forEach(function (row) {
+      var cid = String(row.conversation_id);
+      var count = S.unread[cid] || 0;
+      var pr = row.counterpart_id ? S.presence[String(row.counterpart_id)] : null;
+      var online = pr ? !!pr.online : (Date.now() - (S.lastActive[cid] || 0) < ACTIVE_WINDOW_MS);
+      var ended = row.status === "CLOSED";
+      html += '<button type="button" class="ld-conv' + (cid === String(S.activeId) ? " active" : "") + '" data-conv="' + esc(cid) + '">' +
+        '<span class="ld-avatar' + (online ? " on" : "") + '">' + esc((titleOf(row) || "客").slice(0, 1)) + '<i class="ld-dot' + (online ? " on" : "") + '"></i></span>' +
+        '<span class="ld-conv-main">' +
+          '<span class="ld-conv-top"><span class="ld-conv-name">' + esc(titleOf(row)) +
+            (row.counterpart_phone ? '<span class="ld-conv-phone">' + esc(row.counterpart_phone) + "</span>" : "") + "</span>" +
+            (ended ? '<span class="ld-state closed">已结束</span>' : "") +
+            '<span class="ld-conv-time">' + fmtTime(row.last_message_at) + "</span></span>" +
+          '<span class="ld-conv-preview">' + esc(row.last_message_preview || "（暂无消息）") + "</span>" +
+        "</span>" +
+        (count > 0 ? '<span class="ld-unread">' + (count > 99 ? "99+" : count) + "</span>" : "") +
+        "</button>";
+    });
+    el.innerHTML = html;
+  }
+  function renderChatHead() {
+    var c = activeConv();
+    document.getElementById("ld-chat-title").innerHTML = c ? esc(titleOf(c)) + '<span class="cid">#' + esc(c.conversation_id) + "</span>" : "未选择会话";
+    renderBanner();
+  }
+  function renderBanner() {
+    var zone = document.getElementById("ld-banner-zone");
+    // 接入状态已移除：横幅只用于展示操作报错
+    zone.innerHTML = S.actionError ? '<div class="ld-banner error"><span>' + esc(S.actionError) + "</span></div>" : "";
+  }
+  function renderMsgs() {
+    var el = document.getElementById("ld-msgs");
+    var c = activeConv();
+    if (!c) { el.innerHTML = '<div class="ld-empty">从左侧选择一个会话。</div>'; return; }
+    var st = store[String(c.conversation_id)];
+    if (!st || !st.list.length) {
+      el.innerHTML = '<div class="ld-empty">' + (c.last_message_preview
+        ? "最后一条：" + esc(c.last_message_preview)
+        : "该会话暂无消息。历史消息会在打开会话时自动从服务端补齐。") + "</div>";
+      return;
+    }
+    var html = "";
+    st.list.forEach(function (m) {
+      var mine = String(m.senderId) === myId;
+      var time = m.ts ? fmtTime(m.ts) : "";
+      var stateHtml = "";
+      if (mine) {
+        if (m.status === "sending") stateHtml = '<span>发送中…</span>';
+        else if (m.status === "sent") stateHtml = "<span>✓ 已送达</span>";
+        else if (m.status === "failed") stateHtml = '<span class="ld-msg-failed" data-retry="' + esc(m.clientMsgId) + '">⚠ 失败 · 点击重发</span>';
+      }
+      html += '<div class="ld-row' + (mine ? " mine" : "") + '"><div class="ld-bubble">' +
+        '<div class="ld-bubble-text">' + esc(m.content) + "</div>" +
+        '<div class="ld-bubble-meta"><span>' + time + "</span>" + stateHtml + "</div></div></div>";
+    });
+    el.innerHTML = html;
+    el.scrollTop = el.scrollHeight;
+  }
+  function renderQuick() {
+    var el = document.getElementById("ld-quick");
+    var c = activeConv();
+    var usable = !!(c && c.status !== "CLOSED");
+    var html = "";
+    S.quickReplies.forEach(function (r) {
+      html += '<span class="ld-chip-wrap ' + (r.is_shared ? "shared" : "personal") + '">' +
+        '<button type="button" class="ld-chip" data-quick="' + esc(r.id) + '" title="' + esc(r.category) + (r.is_shared ? " · 公共话术" : " · 我的话术") + '"' + (usable ? "" : " disabled") + ">" + esc(r.content) + "</button>" +
+        (!r.is_shared ? '<button type="button" class="ld-chip-del" data-quick-del="' + esc(r.id) + '" title="删除我的话术">×</button>' : "") +
+        "</span>";
+    });
+    html += '<span class="ld-quick-add"><input type="text" id="ld-new-reply" placeholder="新增我的话术…" maxlength="500" value="' + esc(S.newReply) + '">' +
+      '<button type="button" class="mini-btn" id="ld-add-reply"' + (S.replyBusy || !(S.newReply || "").trim() ? " disabled" : "") + ">添加</button></span>";
+    el.innerHTML = html;
+  }
+  function renderInput() {
+    var input = document.getElementById("ld-input");
+    var btn = document.getElementById("ld-send");
+    var c = activeConv();
+    var usable = !!(c && c.status !== "CLOSED");
+    input.disabled = !usable;
+    btn.disabled = !usable || !(S.inputText || "").trim();
+    if (document.activeElement !== input) input.value = S.inputText || "";
+    input.placeholder = c ? (c.status === "CLOSED" ? "会话已结束，不能回复" : "回复客户…（回车发送）") : "从左侧选择一个会话";
+  }
+  function renderRating() {
+    var el = document.getElementById("ld-rating-box");
+    if (!el) return;
+    var r = S.rating;
+    var html = '<div class="ld-side-card"><b style="font-size:13px">我的满意度</b>';
+    if (!r || !r.total) {
+      html += '<div class="ld-side-note" style="margin-top:6px">还没有客户评价。会话结束后客户可在 C 端评分。</div>';
+    } else {
+      html += '<div class="ld-rating-avg"><b>' + (r.avg_score != null ? Number(r.avg_score).toFixed(1) : "—") + "</b><span class='muted' style='font-size:12px'>/ 5.0 · " + r.total + " 条</span></div>";
+      ["5", "4", "3", "2", "1"].forEach(function (star) {
+        var count = (r.distribution && r.distribution[star]) || 0;
+        var pct = r.total ? Math.round(count / r.total * 100) : 0;
+        html += '<div class="ld-rating-bar"><span>' + star + "★</span><span class='ld-rating-track'><span style='width:" + pct + "%'></span></span><span>" + count + "</span></div>";
+      });
+      (r.recent || []).slice(0, 2).forEach(function (item) {
+        html += '<div class="ld-rating-item"><span style="color:var(--warn)">' + "★".repeat(item.score) + '</span> ' + esc(item.comment || "（未留言）") + ' <span class="muted">— ' + esc(item.rater_name) + "</span></div>";
+      });
+    }
+    html += "</div>";
+    el.innerHTML = html;
+  }
+  function renderSide() {
+    var el = document.getElementById("ld-side");
+    var c = activeConv();
+    var html = "";
+    if (!c) {
+      html += '<div class="ld-side-card ld-empty">未选择会话。</div>';
+    } else {
+      var pr = c.counterpart_id ? S.presence[String(c.counterpart_id)] : null;
+      html += '<div class="ld-side-card">' +
+        '<div class="ld-side-row"><span>客户</span><span>' + esc(c.counterpart_name || "—") + "</span></div>" +
+        '<div class="ld-side-row"><span>手机</span><span>' + esc(c.counterpart_phone || "—") + "</span></div>" +
+        '<div class="ld-side-row"><span>在线</span><span class="' + (pr && pr.online ? "ld-text-on" : "ld-text-off") + '">' +
+          (pr ? (pr.online ? "在线（" + pr.device_count + " 台设备）" : "离线") : "未知") + "</span></div>" +
+        '<div class="ld-side-row"><span>状态</span><span>' + (c.status === "CLOSED" ? "已结束" : "进行中") + "</span></div>" +
+        (c.agent_note ? '<div class="ld-side-row note"><span>结单备注</span><span>' + esc(c.agent_note) + "</span></div>" : "") +
+        "</div>";
+      // 操作只剩会话生命周期：进行中→结束；已结束→重开（接入/放回已随接入状态一起删除）
+      html += '<div class="ld-side-card"><div class="ld-side-actions">';
+      if (c.status === "CLOSED") {
+        html += '<button type="button" class="mini-btn full" data-act="reopen" data-id="' + esc(c.conversation_id) + '"' + (S.busy ? " disabled" : "") + ">重新打开</button>";
+      } else {
+        html += '<button type="button" class="mini-btn danger full" data-act="close-open"' + (S.busy ? " disabled" : "") + ">结束会话</button>";
+        if (S.closing) {
+          html += '<div class="ld-inline-panel"><input type="text" id="ld-close-note" maxlength="255" placeholder="结单备注（选填）" value="' + esc(S.closeNote) + '">' +
+            '<button type="button" class="mini-btn danger" data-act="close-ok" data-id="' + esc(c.conversation_id) + '"' + (S.busy ? " disabled" : "") + ">确认结束</button>" +
+            '<button type="button" class="mini-btn" data-act="close-cancel">取消</button></div>';
+        }
+      }
+      html += "</div></div>";
+    }
+    html += '<div id="ld-rating-box"></div>';
+    html += '<div class="ld-side-card ld-side-note"><b style="color:var(--text-2)">口径说明</b><br>' +
+      "消息列表按「最后一条消息」时间倒序，最近有人说话的排最前；15 秒兜底刷新，WS 实时收发。新会话自动归属当前客服，无需手动接入；WS 未连接时发送自动走 HTTP 接口（幂等）。</div>";
+    el.innerHTML = html;
+    renderRating();
+  }
+
+  /* ───────── 事件绑定 ───────── */
+  document.getElementById("ld-list").addEventListener("click", function (e) {
+    var item = e.target.closest("[data-conv]");
+    if (!item) return;
+    S.activeId = String(item.getAttribute("data-conv"));
+    S.unread[S.activeId] = 0;
+    S.closing = false; S.closeNote = "";
+    var c = activeConv();
+    renderList(); renderChatHead(); renderMsgs(); renderSide(); renderQuick(); renderInput();
+    if (c) {
+      ensureClaimed(c).then(function () { loadHistory(S.activeId); });
+    }
+  });
+  document.getElementById("ld-send").addEventListener("click", function () { sendMessage(S.inputText); });
+  document.getElementById("ld-input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); sendMessage(S.inputText); }
+  });
+  document.getElementById("ld-input").addEventListener("input", function (e) {
+    S.inputText = e.target.value;
+    var c = activeConv();
+    document.getElementById("ld-send").disabled = !c || c.status === "CLOSED" || !(S.inputText || "").trim();
+  });
+  document.getElementById("ld-quick").addEventListener("click", function (e) {
+    var del = e.target.closest("[data-quick-del]");
+    if (del) { removeReply(del.getAttribute("data-quick-del")); return; }
+    var chip = e.target.closest("[data-quick]");
+    if (chip) {
+      var r = null;
+      S.quickReplies.forEach(function (x) { if (String(x.id) === String(chip.getAttribute("data-quick"))) r = x; });
+      if (r) sendMessage(r.content);
+      return;
+    }
+    if (e.target.id === "ld-add-reply") addReply();
+  });
+  document.getElementById("ld-quick").addEventListener("input", function (e) {
+    if (e.target.id === "ld-new-reply") {
+      S.newReply = e.target.value;
+      document.getElementById("ld-add-reply").disabled = S.replyBusy || !(S.newReply || "").trim();
+    }
+  });
+  document.getElementById("ld-quick").addEventListener("keydown", function (e) {
+    if (e.target.id === "ld-new-reply" && e.key === "Enter") { e.preventDefault(); addReply(); }
+  });
+  document.getElementById("pageContent").addEventListener("click", function (e) {
+    var retry = e.target.closest("[data-retry]");
+    if (retry) { retrySend(retry.getAttribute("data-retry")); return; }
+    var btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    var act = btn.getAttribute("data-act"), id = btn.getAttribute("data-id");
+    if (act === "reopen") reopenConv(id);
+    else if (act === "close-open") { S.closing = true; renderSide(); }
+    else if (act === "close-cancel") { S.closing = false; S.closeNote = ""; renderSide(); }
+    else if (act === "close-ok") {
+      var noteInput = document.getElementById("ld-close-note");
+      S.closeNote = noteInput ? noteInput.value : "";
+      closeConv(id, (S.closeNote || "").trim());
+    }
+  });
+  document.getElementById("pageContent").addEventListener("input", function (e) {
+    if (e.target.id === "ld-close-note") S.closeNote = e.target.value;
+  });
+
+  /* ───────── 启动 ───────── */
+  loadQueue().then(function () {
+    renderChatHead(); renderMsgs(); renderQuick(); renderInput(); renderSide();
+    var c = activeConv();
+    if (c) ensureClaimed(c).then(function () { loadHistory(S.activeId); });
+  });
+  loadQuickReplies(); loadRating();
+  wsConnect();
+  setInterval(function () { loadQueue(true); }, POOL_POLL_MS);
+  setInterval(loadPresence, PRESENCE_POLL_MS);
+})();
+});
+</script>
+</body>
+</html>

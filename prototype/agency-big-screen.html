@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实时大屏 · 旅行社后台</title>
+<link rel="stylesheet" href="assets/common.css">
+<style>
+/* ── 运营实时大屏（第 5 棒 BigScreen 的原型站版 · 深色数据大屏风格）────
+   数据契约：GET /v1/stats/live（SSE，第 2 棒 statsRouter 每 5s 一拍）
+   核心五项：{ online_count, online_conn, today_order_count, message_count, seckill_qps, ts, degraded[] }
+   第 5 棒扩展：{ gmv_today, agent{pending,serving,today_conversations,avg_rating},
+                 order_status{...}, hourly_messages[24], recent_orders[5], mq{backlog,pending,dlq} }
+   取数：fetch 流式实现 SSE 语义（原生 EventSource 带不了 Bearer 头）；
+   1s rAF 补间；degraded / event:error 红闪；断流台阶重连 3→6→12→24→30s；
+   事件流由相邻两拍快照 diff 派生（零后端改动）。 */
+.bs-wrap { max-width: 1240px; margin: 0 auto; }
+.board {
+  position: relative; border-radius: 16px; padding: 20px 22px 18px; overflow: hidden;
+  background: radial-gradient(1200px 500px at 20% -10%, #12264d 0%, #0a1730 45%, #060b1a 100%);
+  border: 1px solid #1c3157; color: #d7e3f8;
+  box-shadow: 0 10px 40px rgba(4, 12, 32, .45);
+}
+.board::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(rgba(77,214,255,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(77,214,255,.045) 1px, transparent 1px);
+  background-size: 42px 42px; }
+
+/* 顶栏 */
+.bs-top { position: relative; display: flex; justify-content: space-between; align-items: center; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid rgba(94,140,220,.22); }
+.bs-title { display: flex; align-items: center; gap: 12px; }
+.bs-title h1 { margin: 0; font-size: 21px; letter-spacing: 3px; color: #eaf3ff; text-shadow: 0 0 18px rgba(77,214,255,.45); }
+.bs-title .deco { width: 34px; height: 8px; clip-path: polygon(0 0, 100% 0, 78% 100%, 0 100%); background: linear-gradient(90deg, #4dd6ff, rgba(77,214,255,0)); }
+.bs-live { display: flex; align-items: center; gap: 14px; font-size: 12.5px; color: #9db4d8; }
+.bs-live .clock { font-variant-numeric: tabular-nums; font-size: 15px; color: #cfe3ff; letter-spacing: 1px; }
+.bs-conn { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.bs-conn-dot { width: 9px; height: 9px; border-radius: 50%; background: #3a4a68; }
+.bs-conn-dot.on { background: #37e0a0; box-shadow: 0 0 10px rgba(55,224,160,.9); animation: bs-pulse 2s ease-in-out infinite; }
+.bs-conn-down { color: #ffb454; }
+@keyframes bs-pulse { 0%,100% { box-shadow: 0 0 4px rgba(55,224,160,.5);} 50% { box-shadow: 0 0 14px rgba(55,224,160,1);} }
+
+/* 横幅 */
+.bs-banner { margin-top: 12px; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; }
+.bs-banner.error { background: rgba(255,90,90,.12); border: 1px solid rgba(255,107,107,.45); color: #ff9b9b; }
+.bs-banner.down { background: rgba(255,180,84,.1); border: 1px solid rgba(255,180,84,.4); color: #ffc46b; }
+
+/* 指标卡（5 张） */
+.bs-grid { position: relative; display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-top: 16px; }
+@media (max-width: 1000px) { .bs-grid { grid-template-columns: repeat(2, 1fr); } }
+.bs-card { position: relative; border-radius: 12px; padding: 13px 14px 9px; overflow: hidden;
+  background: linear-gradient(180deg, rgba(120,170,255,.08), rgba(120,170,255,.02));
+  border: 1px solid rgba(110,160,235,.22); }
+.bs-card::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--ac, #4dd6ff); opacity: .85; }
+.bs-label { font-size: 12.5px; color: #9db4d8; letter-spacing: 1px; display: flex; justify-content: space-between; align-items: center; }
+.bs-label .idx { font-size: 10px; color: #5b739c; letter-spacing: 2px; }
+.bs-value { margin: 9px 0 3px; display: flex; align-items: baseline; gap: 6px; }
+.bs-prefix { font-size: 16px; font-weight: 600; color: var(--ac, #4dd6ff); opacity: .8; }
+.bs-number { font-size: 33px; font-weight: 700; line-height: 1; color: var(--ac, #4dd6ff); font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 22px color-mix(in srgb, var(--ac, #4dd6ff) 55%, transparent); }
+.bs-online-conn { font-size: 11.5px; color: #7e95bb; }
+.bs-spark { width: 100%; height: 38px; display: block; margin-top: 4px; }
+.bs-spark-empty { font-size: 11.5px; color: #54688c; height: 42px; display: flex; align-items: center; }
+.bs-foot { margin-top: 7px; padding-top: 6px; border-top: 1px dashed rgba(110,160,235,.2); font-size: 10.5px; color: #7188ad; line-height: 1.5; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.bs-degraded-tag { background: rgba(255,107,107,.18); border: 1px solid rgba(255,107,107,.55); color: #ff8a8a; border-radius: 4px; padding: 1px 6px; font-size: 10.5px; flex: none; animation: bs-flash 1.4s ease-in-out 0s 3; }
+.bs-card.degraded { border-color: rgba(255,107,107,.6); box-shadow: inset 0 0 30px rgba(255,60,60,.08); }
+.bs-card.degraded .bs-number { color: #ff6b6b; text-shadow: 0 0 22px rgba(255,80,80,.5); animation: bs-flash 1.4s ease-in-out 0s 3; }
+@keyframes bs-flash { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* 中部三面板：客服接待 / 订单环形 / 24h 消息柱状 */
+.bs-mid { position: relative; display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 12px; margin-top: 12px; }
+@media (max-width: 1000px) { .bs-mid { grid-template-columns: 1fr; } }
+.bs-panel { border-radius: 12px; border: 1px solid rgba(110,160,235,.2); background: rgba(120,170,255,.04); padding: 12px 14px; }
+.bs-panel b { font-size: 12.5px; color: #9db4d8; letter-spacing: 1px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+/* 客服接待监控 */
+.bs-agent { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.bs-agent-tile { border-radius: 9px; padding: 9px 11px; background: rgba(120,170,255,.06); border: 1px solid rgba(110,160,235,.18); }
+.bs-agent-tile .v { display: block; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ac, #4dd6ff); line-height: 1.1; }
+.bs-agent-tile .v.alert { color: #ffb454; text-shadow: 0 0 14px rgba(255,180,84,.5); }
+.bs-agent-tile .k { display: block; margin-top: 3px; font-size: 11px; color: #7188ad; }
+
+/* 订单状态环形图 */
+.bs-donut-wrap { margin-top: 8px; display: flex; align-items: center; gap: 14px; }
+.bs-donut { width: 128px; height: 128px; flex: none; }
+.bs-donut-center { font-size: 20px; font-weight: 700; fill: #eaf3ff; }
+.bs-donut-center-sub { font-size: 9px; fill: #7188ad; }
+.bs-legend { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 11.5px; }
+.bs-legend-item { display: flex; align-items: center; gap: 6px; color: #cfe0f5; white-space: nowrap; }
+.bs-legend-dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.bs-legend-item .n { color: #7188ad; font-variant-numeric: tabular-nums; }
+.bs-donut-empty { font-size: 11.5px; color: #54688c; }
+
+/* 24h 消息柱状图 */
+.bs-bars-svg { width: 100%; height: 128px; display: block; margin-top: 8px; }
+.bs-bars-empty { font-size: 11.5px; color: #54688c; height: 128px; display: flex; align-items: center; }
+
+/* 最新订单 + 事件流 */
+.bs-mid2 { position: relative; display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; margin-top: 12px; }
+@media (max-width: 1000px) { .bs-mid2 { grid-template-columns: 1fr; } }
+.bs-mq-badge { font-size: 10.5px; font-weight: 400; border-radius: 4px; padding: 1px 7px; letter-spacing: 0; }
+.bs-mq-badge.ok { background: rgba(55,224,160,.14); border: 1px solid rgba(55,224,160,.4); color: #37e0a0; }
+.bs-mq-badge.busy { background: rgba(255,107,107,.18); border: 1px solid rgba(255,107,107,.55); color: #ff8a8a; animation: bs-flash 1.4s ease-in-out infinite; }
+.bs-mq-badge.na { background: rgba(255,180,84,.12); border: 1px solid rgba(255,180,84,.4); color: #ffc46b; }
+.bs-orders { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.bs-order-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #cfe0f5;
+  background: rgba(120,170,255,.05); border: 1px solid rgba(110,160,235,.14); border-radius: 8px; padding: 7px 10px; }
+.bs-order-row .no { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: #7e95bb; flex: none; }
+.bs-order-row .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bs-order-row .amt { font-weight: 700; color: #ffd166; font-variant-numeric: tabular-nums; flex: none; }
+.bs-order-row .tm { font-size: 11px; color: #7188ad; flex: none; font-variant-numeric: tabular-nums; }
+.bs-pill { flex: none; font-size: 10.5px; border-radius: 4px; padding: 1px 7px; }
+.bs-pill.PENDING   { background: rgba(255,200,87,.14);  border: 1px solid rgba(255,200,87,.45);  color: #ffc857; }
+.bs-pill.PAID      { background: rgba(55,224,160,.14);  border: 1px solid rgba(55,224,160,.45);  color: #37e0a0; }
+.bs-pill.CONFIRMED { background: rgba(167,139,250,.14); border: 1px solid rgba(167,139,250,.45); color: #a78bfa; }
+.bs-pill.COMPLETED { background: rgba(77,214,255,.14);  border: 1px solid rgba(77,214,255,.45);  color: #4dd6ff; }
+.bs-pill.CANCELLED { background: rgba(139,155,184,.14); border: 1px solid rgba(139,155,184,.45); color: #8b9bb8; }
+.bs-pill.REFUNDED  { background: rgba(255,107,107,.14); border: 1px solid rgba(255,107,107,.45);  color: #ff8a8a; }
+.bs-orders-empty { font-size: 11.5px; color: #54688c; padding: 8px 0; }
+
+/* 事件流 */
+.bs-feed { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 208px; overflow: auto; }
+.bs-feed-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: #cfe0f5;
+  border-left: 2px solid var(--fc, #4dd6ff); background: rgba(120,170,255,.04); border-radius: 0 7px 7px 0; padding: 5px 9px; }
+.bs-feed-row .t { font-size: 10.5px; color: #64789e; font-variant-numeric: tabular-nums; flex: none; }
+.bs-feed-row.up   { --fc: #37e0a0; }
+.bs-feed-row.down { --fc: #8b9bb8; }
+.bs-feed-row.gold { --fc: #ffd166; }
+.bs-feed-row.warn { --fc: #ffb454; }
+.bs-feed-row.msg  { --fc: #a78bfa; }
+.bs-feed-empty { font-size: 11.5px; color: #54688c; padding: 10px 0; }
+
+/* 底部：链路状态 + 原始快照 */
+.bs-bottom { position: relative; display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; margin-top: 12px; }
+@media (max-width: 1000px) { .bs-bottom { grid-template-columns: 1fr; } }
+.bs-status-rows { margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 12px; }
+.bs-status-row { display: flex; justify-content: space-between; gap: 8px; color: #cfe0f5; }
+.bs-status-row .k { color: #7188ad; }
+.bs-ok { color: #37e0a0; } .bs-bad { color: #ff8a8a; } .bs-warn { color: #ffc46b; }
+.bs-json { margin-top: 8px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.7; color: #8fb7e8; white-space: pre-wrap; word-break: break-all; max-height: 96px; overflow: auto; }
+.bs-footer { margin-top: 12px; font-size: 11.5px; color: #64789e; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div id="adminRoot"></div>
+<main class="container" id="pageContent">
+  <div class="page-head">
+    <div>
+      <h1 style="margin:0;font-size:20px">运营实时大屏</h1>
+      <p style="margin:4px 0 0;font-size:12.5px;color:var(--text-muted)">
+        数据源 GET /v1/stats/live（SSE 单向推送）· 不轮询 · 服务端每 5s 一条聚合 SQL · 数字 1s 缓动补间 · 事件流由快照 diff 派生
+      </p>
+    </div>
+  </div>
+
+  <div class="bs-wrap">
+    <div class="board">
+      <div class="bs-top">
+        <div class="bs-title"><span class="deco"></span><h1>运营实时大屏</h1><span class="deco" style="transform:scaleX(-1)"></span></div>
+        <div class="bs-live">
+          <span class="clock" id="bs-clock">--:--:--</span>
+          <span class="bs-conn"><span class="bs-conn-dot" id="bs-dot"></span><span id="bs-conn-text">连接中…</span><span id="bs-ts"></span></span>
+        </div>
+      </div>
+      <div id="bs-banners"></div>
+      <div class="bs-grid" id="bs-grid"></div>
+
+      <div class="bs-mid">
+        <div class="bs-panel">
+          <b>客服接待监控</b>
+          <div class="bs-agent" id="bs-agent"></div>
+        </div>
+        <div class="bs-panel">
+          <b>订单状态分布</b>
+          <div class="bs-donut-wrap" id="bs-donut"><div class="bs-donut-empty">等待数据…</div></div>
+        </div>
+        <div class="bs-panel">
+          <b>24 小时消息量</b>
+          <div id="bs-bars"><div class="bs-bars-empty">等待数据…</div></div>
+        </div>
+      </div>
+
+      <div class="bs-mid2">
+        <div class="bs-panel">
+          <b><span>最新订单</span><span class="bs-mq-badge na" id="bs-mq-badge">MQ —</span></b>
+          <div class="bs-orders" id="bs-orders"><div class="bs-orders-empty">等待数据…</div></div>
+        </div>
+        <div class="bs-panel">
+          <b>实时事件流<span style="font-weight:400;font-size:10.5px;color:#64789e">（快照 diff 自动生成）</span></b>
+          <div class="bs-feed" id="bs-feed"><div class="bs-feed-empty">等待事件…数据发生变化时这里会滚动记录</div></div>
+        </div>
+      </div>
+
+      <div class="bs-bottom">
+        <div class="bs-panel">
+          <b>链路状态</b>
+          <div class="bs-status-rows" id="bs-status"></div>
+        </div>
+        <div class="bs-panel">
+          <b>数据源快照（原始 JSON）</b>
+          <div class="bs-json" id="bs-json">等待第一拍数据…</div>
+        </div>
+      </div>
+      <div class="bs-footer">
+        演示提示：游客端发消息 → 「消息吞吐」下一拍 +1，同时事件流记录「新消息」；再开一个客户端 → 「在线人数」+1；
+        下单 → 「今日成交」与「最新订单」同步变化；客服台接入会话 → 「接待监控」的待接入/接待中随之变化；
+        MQ 待 ACK &gt; 0 或出现死信时右上角徽标红闪。降级项详见《大屏演示SOP.md》。
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="assets/api.js"></script>
+<script src="assets/ui.js"></script>
+<script src="assets/nav.js"></script>
+<script>
+onWebApi(function () {
+AdminLayout.mount({ role: "agency", active: "big-screen", title: "实时大屏", crumb: "经营概览" });
+
+(function () {
+  var api = window.WebApi, SA = window.SharedAuth, U = window.UI;
+  var HISTORY_LIMIT = 60;   // 折线保留最近 60 拍（5s 一拍 ≈ 5 分钟窗口）
+  var TWEEN_MS = 1000;      // 分工文档要求：1s 补间
+  var DEFAULT_RETRY_MS = 3000, BACKOFF_CAP_MS = 30000, STALL_TIMEOUT_MS = 30000;
+
+  /* 五个指标块：key/口径与后端 statsRouter 完全一致 */
+  var METRICS = [
+    { key: "online",   label: "在线人数",   sub: "WS 真实在线（去重）· 括号内为连接数", decimals: 0, ac: "#4dd6ff", degradeMarks: ["online_count", "online_conn"], pick: function (s) { return s.online_count; } },
+    { key: "orders",   label: "今日订单",   sub: "MySQL tour_order 当日计数",           decimals: 0, ac: "#37e0a0", degradeMarks: ["mysql"],                        pick: function (s) { return s.today_order_count; } },
+    { key: "gmv",      label: "今日成交",   sub: "当日已支付+已完成订单金额（元）",     decimals: 0, ac: "#ff8fab", degradeMarks: ["mysql"], prefix: "¥",          pick: function (s) { return s.gmv_today || 0; } },
+    { key: "messages", label: "消息吞吐",   sub: "Redis im:stat:msg（缺失回退当日 SQL）", decimals: 0, ac: "#a78bfa", degradeMarks: ["message_count", "mysql"],     pick: function (s) { return s.message_count; } },
+    { key: "qps",      label: "秒杀 QPS",   sub: "最近 10s 成交订单数 ÷ 10",            decimals: 2, ac: "#ffc857", degradeMarks: ["mysql"],                        pick: function (s) { return s.seckill_qps; } }
+  ];
+
+  /* 订单状态 → 环形图颜色 / 中文名 */
+  var ORDER_STATUS_META = [
+    { key: "pending",   name: "待支付", color: "#ffc857" },
+    { key: "paid",      name: "已支付", color: "#37e0a0" },
+    { key: "confirmed", name: "已确认", color: "#a78bfa" },
+    { key: "completed", name: "已完成", color: "#4dd6ff" },
+    { key: "cancelled", name: "已取消", color: "#8b9bb8" },
+    { key: "refunded",  name: "已退款", color: "#ff6b6b" }
+  ];
+  /* 订单列表 pill 的中文名（后端返回大写枚举） */
+  var ORDER_STATUS_NAME = { PENDING: "待支付", PAID: "已支付", CONFIRMED: "已确认", COMPLETED: "已完成", CANCELLED: "已取消", REFUNDED: "已退款" };
+
+  var S = { snapshot: null, connected: false, downReason: "", serverError: "", history: {}, tweens: {},
+            ticks: 0, reconnects: 0, startedAt: Date.now(), feed: [] };
+
+  function esc(s) { return U.esc ? U.esc(s) : String(s == null ? "" : s); }
+  function fmt(v, decimals) {
+    return Number(v || 0).toLocaleString("zh-CN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  }
+  function hhmm(iso) {
+    var d = iso instanceof Date ? iso : new Date(iso);
+    if (isNaN(d.getTime())) return "--:--";
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  function nowHms() {
+    var d = new Date();
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2);
+  }
+
+  /* ───────── 数字 1s 缓动（rAF）───────── */
+  function tweenTo(key, target, decimals, el) {
+    var from = S.tweens[key] != null ? S.tweens[key] : 0;
+    if (S.tweens[key + "_raf"]) cancelAnimationFrame(S.tweens[key + "_raf"]);
+    var startTs = performance.now();
+    function tick(now) {
+      var p = Math.min((now - startTs) / TWEEN_MS, 1);
+      var eased = 1 - Math.pow(1 - p, 3);
+      var val = from + (target - from) * eased;
+      S.tweens[key] = val;
+      el.textContent = fmt(val, decimals);
+      if (p < 1) S.tweens[key + "_raf"] = requestAnimationFrame(tick);
+      else S.tweens[key + "_raf"] = null;
+    }
+    S.tweens[key + "_raf"] = requestAnimationFrame(tick);
+  }
+
+  /* ───────── 面积走势图（SVG，无图表库）───────── */
+  function sparkSvg(points, color) {
+    if (!points || points.length < 2) return '<div class="bs-spark-empty">等待数据…</div>';
+    var max = Math.max.apply(null, points.concat([1]));
+    var min = Math.min.apply(null, points.concat([0]));
+    var span = Math.max(max - min, 1e-9), W = 100, H = 32;
+    var line = points.map(function (v, i) {
+      var x = (i / (points.length - 1)) * W;
+      var y = H - ((v - min) / span) * (H - 6) - 3;
+      return (i === 0 ? "M" : "L") + x.toFixed(2) + "," + y.toFixed(2);
+    }).join(" ");
+    var gid = "bsg-" + color.replace("#", "");
+    return '<svg class="bs-spark" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">' +
+      "<defs><linearGradient id=\"" + gid + "\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">" +
+      "<stop offset=\"0%\" stop-color=\"" + color + "\" stop-opacity=\".35\"/>" +
+      "<stop offset=\"100%\" stop-color=\"" + color + "\" stop-opacity=\"0\"/></linearGradient></defs>" +
+      "<path d=\"" + line + " L100,32 L0,32 Z\" fill=\"url(#" + gid + ")\" stroke=\"none\"/>" +
+      "<path d=\"" + line + "\" fill=\"none\" stroke=\"" + color + "\" stroke-width=\"1.8\" stroke-linejoin=\"round\" stroke-linecap=\"round\" vector-effect=\"non-scaling-stroke\"/>" +
+      "</svg>";
+  }
+
+  /* ───────── 24h 消息柱状图（SVG；arr 旧→新 24 桶）───────── */
+  function barsSvg(arr) {
+    if (!arr || !arr.length) return '<div class="bs-bars-empty">等待数据…</div>';
+    var W = 240, H = 96, pad = 14;
+    var max = Math.max.apply(null, arr.concat([1]));
+    var bw = (W - 8) / arr.length;
+    var nowHour = new Date().getHours();
+    var bars = "", labels = "";
+    for (var i = 0; i < arr.length; i++) {
+      var h = (arr[i] / max) * (H - pad - 8);
+      var x = 4 + i * bw, y = H - pad - h;
+      var isCurrent = i === arr.length - 1;
+      bars += '<rect x="' + (x + 1).toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + Math.max(bw - 2, 1).toFixed(1) +
+        '" height="' + Math.max(h, 0.5).toFixed(1) + '" rx="1.5" fill="' + (isCurrent ? "#4dd6ff" : "rgba(77,214,255,.4)") + '"' +
+        (isCurrent ? ' style="filter:drop-shadow(0 0 4px rgba(77,214,255,.8))"' : "") + "/>";
+      if (i % 4 === 0 || isCurrent) {
+        var hour = ((nowHour - (arr.length - 1 - i)) % 24 + 24) % 24;
+        labels += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 3) + '" text-anchor="middle" font-size="7" fill="#7188ad">' + hour + "时</text>";
+      }
+    }
+    return '<svg class="bs-bars-svg" viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" aria-hidden="true">' + bars + labels + "</svg>";
+  }
+
+  /* ───────── 订单状态环形图（SVG donut）───────── */
+  function donutSvg(st) {
+    var total = ORDER_STATUS_META.reduce(function (sum, m) { return sum + (st[m.key] || 0); }, 0);
+    if (!total) return '<div class="bs-donut-empty">暂无订单数据</div>';
+    var R = 46, C = 2 * Math.PI * R, offset = 0, segs = "";
+    ORDER_STATUS_META.forEach(function (m) {
+      var n = st[m.key] || 0;
+      if (!n) return;
+      var len = n / total * C;
+      segs += '<circle r="' + R + '" cx="60" cy="60" fill="none" stroke="' + m.color + '" stroke-width="12" ' +
+        'stroke-dasharray="' + Math.max(len - 1.2, 0.4).toFixed(2) + " " + (C - Math.max(len - 1.2, 0.4)).toFixed(2) + '" ' +
+        'stroke-dashoffset="' + (-offset).toFixed(2) + '" transform="rotate(-90 60 60)" stroke-linecap="butt"/>';
+      offset += len;
+    });
+    var legend = ORDER_STATUS_META.map(function (m) {
+      return '<div class="bs-legend-item"><span class="bs-legend-dot" style="background:' + m.color + '"></span>' +
+        m.name + ' <span class="n">' + (st[m.key] || 0) + "</span></div>";
+    }).join("");
+    return '<svg class="bs-donut" viewBox="0 0 120 120" aria-hidden="true">' + segs +
+      '<text class="bs-donut-center" x="60" y="60" text-anchor="middle">' + total + "</text>" +
+      '<text class="bs-donut-center-sub" x="60" y="74" text-anchor="middle">总订单</text></svg>' +
+      '<div class="bs-legend">' + legend + "</div>";
+  }
+
+  /* ───────── 客服接待监控 tiles ───────── */
+  function agentHtml(a) {
+    a = a || {};
+    var rating = (a.avg_rating == null) ? "暂无" : a.avg_rating.toFixed(2) + " 分";
+    return '<div class="bs-agent-tile" style="--ac:#ffb454"><span class="v' + (a.pending > 0 ? " alert" : "") + '" id="ba-pending">' + (a.pending || 0) + '</span><span class="k">待接入' + (a.pending > 0 ? " · 需处理" : "") + "</span></div>" +
+      '<div class="bs-agent-tile" style="--ac:#37e0a0"><span class="v" id="ba-serving">' + (a.serving || 0) + '</span><span class="k">接待中</span></div>' +
+      '<div class="bs-agent-tile" style="--ac:#4dd6ff"><span class="v" id="ba-today">' + (a.today_conversations || 0) + '</span><span class="k">今日会话</span></div>' +
+      '<div class="bs-agent-tile" style="--ac:#ffd166"><span class="v" id="ba-rating">' + rating + '</span><span class="k">满意度' + (a.rating_count ? "（" + a.rating_count + " 条评价）" : "") + "</span></div>";
+  }
+
+  /* ───────── 事件流：相邻两拍快照 diff 派生 ───────── */
+  function pushFeed(cls, text) {
+    S.feed.unshift({ t: nowHms(), cls: cls, text: text });
+    S.feed = S.feed.slice(0, 10);
+    var el = document.getElementById("bs-feed");
+    el.innerHTML = S.feed.map(function (e) {
+      return '<div class="bs-feed-row ' + e.cls + '"><span class="t">' + e.t + "</span><span>" + esc(e.text) + "</span></div>";
+    }).join("");
+  }
+  function diffEvents(prev, next) {
+    if (!prev) return;
+    var dOnline = next.online_count - prev.online_count;
+    if (dOnline > 0) pushFeed("up", "游客上线 +" + dOnline);
+    else if (dOnline < 0) pushFeed("down", "游客离线 " + dOnline);
+    var dMsg = next.message_count - prev.message_count;
+    if (dMsg > 0) pushFeed("msg", "新消息 +" + dMsg);
+    var dOrder = next.today_order_count - prev.today_order_count;
+    if (dOrder > 0) pushFeed("up", "新订单 +" + dOrder);
+    var dGmv = (next.gmv_today || 0) - (prev.gmv_today || 0);
+    if (dGmv > 0) pushFeed("gold", "成交 +¥" + fmt(dGmv, 2));
+    var pa = next.agent || {}, pb = prev.agent || {};
+    var dPending = (pa.pending || 0) - (pb.pending || 0);
+    if (dPending > 0) pushFeed("warn", "新会话进入待接入 +" + dPending);
+    else if (dPending < 0) pushFeed("up", "会话被客服接入 " + dPending);
+    var dServing = (pa.serving || 0) - (pb.serving || 0);
+    if (dServing > 0) pushFeed("up", "接待中会话 +" + dServing);
+    else if (dServing < 0) pushFeed("down", "会话结束 " + dServing);
+    var mq = next.mq || {};
+    if (mq.pending > 0 && (prev.mq || {}).pending === 0) pushFeed("warn", "MQ 出现待 ACK 消息");
+    if ((mq.dlq || 0) > ((prev.mq || {}).dlq || 0)) pushFeed("warn", "MQ 新增死信消息");
+  }
+
+  /* ───────── 渲染 ───────── */
+  function buildGrid() {
+    var html = "";
+    METRICS.forEach(function (m, i) {
+      html += '<div class="bs-card" style="--ac:' + m.ac + '" id="bs-card-' + m.key + '">' +
+        '<div class="bs-label"><span>' + m.label + '</span><span class="idx">0' + (i + 1) + "</span></div>" +
+        '<div class="bs-value">' + (m.prefix ? '<span class="bs-prefix">' + m.prefix + '</span>' : "") +
+        '<span class="bs-number" id="bs-num-' + m.key + '">0</span><span class="bs-online-conn" id="bs-extra-' + m.key + '"></span></div>' +
+        '<div id="bs-spark-' + m.key + '"><div class="bs-spark-empty">等待数据…</div></div>' +
+        '<div class="bs-foot"><span>' + m.sub + '</span><span class="bs-degraded-tag" id="bs-tag-' + m.key + '" style="display:none">降级值 · 红闪</span></div>' +
+        "</div>";
+    });
+    document.getElementById("bs-grid").innerHTML = html;
+    document.getElementById("bs-agent").innerHTML = agentHtml(null);
+  }
+
+  function renderClock() {
+    document.getElementById("bs-clock").textContent = nowHms();
+  }
+
+  function renderConn() {
+    var dot = document.getElementById("bs-dot");
+    var text = document.getElementById("bs-conn-text");
+    dot.className = "bs-conn-dot" + (S.connected ? " on" : "");
+    text.className = S.connected ? "" : "bs-conn-down";
+    text.textContent = S.connected ? "SSE 已连接 · 每 5s 推送" : (S.downReason ? "重连中（" + S.downReason + "）" : "连接中…");
+    document.getElementById("bs-ts").textContent = S.snapshot ? " · 更新于 " + new Date(S.snapshot.ts).toLocaleTimeString("zh-CN") : "";
+  }
+
+  function renderBanners() {
+    var html = "";
+    if (S.serverError) html += '<div class="bs-banner error">⚠ ' + esc(S.serverError) + "（流未断，等待下一拍）</div>";
+    if (!S.connected && S.downReason) html += '<div class="bs-banner down">连接断开：' + esc(S.downReason) + " · 正在按 retry 节奏自动重连，无需手动刷新</div>";
+    document.getElementById("bs-banners").innerHTML = html;
+  }
+
+  function renderStatus() {
+    var s = S.snapshot || { degraded: [] };
+    var dg = s.degraded || [];
+    function has(mark) { return dg.indexOf(mark) >= 0; }
+    var redisBad = has("online_count") || has("online_conn") || has("message_count") || has("mq");
+    var mysqlBad = has("mysql");
+    var uptime = Math.floor((Date.now() - S.startedAt) / 1000);
+    var mm = Math.floor(uptime / 60), ss = uptime % 60;
+    var mq = s.mq || {};
+    var rows = [
+      ["SSE 通道", '<span class="' + (S.connected ? "bs-ok" : "bs-warn") + '">' + (S.connected ? "正常（推送中）" : "重连中") + "</span>"],
+      ["已接收拍数", S.ticks + " 拍"],
+      ["Redis 依赖", '<span class="' + (redisBad ? "bs-bad" : "bs-ok") + '">' + (redisBad ? "异常（指标降级）" : "正常") + "</span>"],
+      ["MySQL 依赖", '<span class="' + (mysqlBad ? "bs-bad" : "bs-ok") + '">' + (mysqlBad ? "异常（指标降级）" : "正常") + "</span>"],
+      ["MQ 队列长度", mq.backlog == null ? '<span class="bs-warn">—</span>' : mq.backlog + " 条"],
+      ["MQ 待 ACK", mq.pending == null ? '<span class="bs-warn">—</span>' : (mq.pending > 0 ? '<span class="bs-bad">' + mq.pending + " 条（积压）</span>" : '<span class="bs-ok">0</span>')],
+      ["MQ 死信", mq.dlq == null ? '<span class="bs-warn">—</span>' : (mq.dlq > 0 ? '<span class="bs-bad">' + mq.dlq + " 条</span>" : '<span class="bs-ok">0</span>')],
+      ["重连次数", S.reconnects + " 次"],
+      ["大屏运行", mm + " 分 " + ss + " 秒"]
+    ];
+    document.getElementById("bs-status").innerHTML = rows.map(function (r) {
+      return '<div class="bs-status-row"><span class="k">' + r[0] + "</span><span>" + r[1] + "</span></div>";
+    }).join("");
+    document.getElementById("bs-json").textContent = s.ts ? JSON.stringify(s) : "等待第一拍数据…";
+  }
+
+  function renderMqBadge(mq) {
+    var badge = document.getElementById("bs-mq-badge");
+    if (!badge) return;
+    mq = mq || {};
+    if (mq.redis !== "ok") { badge.className = "bs-mq-badge na"; badge.textContent = "MQ 不可用"; return; }
+    var busy = (mq.pending || 0) > 0 || (mq.dlq || 0) > 0;
+    badge.className = "bs-mq-badge " + (busy ? "busy" : "ok");
+    badge.textContent = busy ? "MQ 积压 待ACK " + mq.pending + " / 死信 " + (mq.dlq || 0) : "MQ 消费正常";
+  }
+
+  function renderSnapshot() {
+    var s = S.snapshot;
+    if (!s) return;
+    METRICS.forEach(function (m) {
+      tweenTo(m.key, m.pick(s), m.decimals, document.getElementById("bs-num-" + m.key));
+      var degraded = m.degradeMarks.some(function (mark) { return (s.degraded || []).indexOf(mark) >= 0; });
+      var card = document.getElementById("bs-card-" + m.key);
+      card.className = "bs-card" + (degraded ? " degraded" : "");
+      card.style.setProperty("--ac", m.ac);
+      document.getElementById("bs-tag-" + m.key).style.display = degraded ? "" : "none";
+      if (m.key === "online") document.getElementById("bs-extra-" + m.key).textContent = "（连接 " + s.online_conn + "）";
+      document.getElementById("bs-spark-" + m.key).innerHTML = sparkSvg(S.history[m.key] || [], degraded ? "#ff6b6b" : m.ac);
+    });
+    document.getElementById("bs-agent").innerHTML = agentHtml(s.agent);
+    document.getElementById("bs-donut").innerHTML = donutSvg(s.order_status || {});
+    document.getElementById("bs-bars").innerHTML = barsSvg(s.hourly_messages || []);
+    var orders = s.recent_orders || [];
+    document.getElementById("bs-orders").innerHTML = orders.length
+      ? orders.map(function (o) {
+          return '<div class="bs-order-row"><span class="no">' + esc(o.order_no) + '</span><span class="title">' + esc(o.title) +
+            '</span><span class="bs-pill ' + esc(o.status) + '">' + esc(ORDER_STATUS_NAME[o.status] || o.status) + '</span><span class="amt">¥' + fmt(o.amount, 2) +
+            '</span><span class="tm">' + hhmm(o.created_at) + "</span></div>";
+        }).join("")
+      : '<div class="bs-orders-empty">暂无订单</div>';
+    renderMqBadge(s.mq);
+    renderConn(); renderStatus();
+  }
+
+  /* ───────── SSE 取数通道（fetch 流式，Bearer 头；协议语义同 EventSource）───────── */
+  function statsUrl() {
+    var base = String((SA.getAuthConfig && SA.getAuthConfig().baseUrl) || "http://127.0.0.1:3001/v1").replace(/\/+$/, "");
+    return /\/v1$/.test(base) ? base + "/stats/live" : base + "/v1/stats/live";
+  }
+  function parseSseEvent(block) {
+    var event = "message", dataLines = [], retryMs = null;
+    block.split("\n").forEach(function (raw) {
+      var line = raw.replace(/\r$/, "");
+      if (!line || line.charAt(0) === ":") return; // 注释/心跳
+      var idx = line.indexOf(":");
+      var field = idx < 0 ? line : line.slice(0, idx);
+      var value = idx < 0 ? "" : line.slice(idx + 1);
+      if (value.charAt(0) === " ") value = value.slice(1);
+      if (field === "event") event = value;
+      else if (field === "data") dataLines.push(value);
+      else if (field === "retry") { var n = Number(value); if (isFinite(n) && n > 0) retryMs = n; }
+    });
+    return { event: event, dataLines: dataLines, retryMs: retryMs };
+  }
+  function openLiveStats() {
+    var closed = false, abort = null, reconnectTimer = null, stallTimer = null;
+    var retryHintMs = DEFAULT_RETRY_MS, failures = 0;
+    function clearStall() { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } }
+    function scheduleReconnect(reason) {
+      clearStall();
+      if (closed) return;
+      S.connected = false; S.downReason = reason; S.reconnects += 1; renderConn(); renderBanners(); renderStatus();
+      var base = Math.min(retryHintMs * Math.pow(2, Math.min(failures, 4)), BACKOFF_CAP_MS);
+      var delay = Math.round(base * (0.8 + Math.random() * 0.4)); // ±20% 抖动防重连风暴
+      failures += 1;
+      reconnectTimer = setTimeout(consume, delay);
+    }
+    function consume() {
+      if (closed) return;
+      abort = new AbortController();
+      var token = SA.getAccessToken && SA.getAccessToken();
+      fetch(statsUrl(), {
+        method: "GET",
+        headers: { Accept: "text/event-stream", Authorization: "Bearer " + token }, // EventSource 给不了的头
+        signal: abort.signal,
+        cache: "no-store"
+      }).then(function (res) {
+        if (!res.ok || !res.body) { scheduleReconnect("HTTP " + res.status); return; }
+        failures = 0; retryHintMs = DEFAULT_RETRY_MS;
+        S.connected = true; S.downReason = ""; renderConn(); renderBanners();
+        var reader = res.body.getReader(), decoder = new TextDecoder(), buffer = "";
+        function armStall() { clearStall(); stallTimer = setTimeout(function () { abort.abort(); }, STALL_TIMEOUT_MS); }
+        armStall();
+        function pump() {
+          return reader.read().then(function (r) {
+            if (closed) return;
+            if (r.done) { scheduleReconnect("服务端关闭了流"); return; }
+            armStall();
+            buffer += decoder.decode(r.value, { stream: true }).replace(/\r\n/g, "\n");
+            var sep;
+            while ((sep = buffer.indexOf("\n\n")) >= 0) {
+              var block = buffer.slice(0, sep);
+              buffer = buffer.slice(sep + 2);
+              if (!block.trim()) continue;
+              var parsed = parseSseEvent(block);
+              if (parsed.retryMs !== null) retryHintMs = parsed.retryMs;
+              if (parsed.event === "stats" && parsed.dataLines.length) {
+                try {
+                  var snap = JSON.parse(parsed.dataLines.join("\n"));
+                  diffEvents(S.snapshot, snap);   // 事件流：先 diff 再换新快照
+                  S.snapshot = snap;
+                  S.ticks += 1;
+                  pushHistory(snap);
+                  renderSnapshot();
+                } catch (e) { /* 单拍解析失败：丢一拍，流不断 */ }
+              } else if (parsed.event === "error" && parsed.dataLines.length) {
+                try { S.serverError = (JSON.parse(parsed.dataLines.join("\n")) || {}).message || "统计采集失败"; }
+                catch (e) { S.serverError = "统计采集失败"; }
+                renderBanners();
+              }
+            }
+            return pump();
+          });
+        }
+        return pump().catch(function (err) {
+          if (closed || (err && err.name === "AbortError")) return;
+          scheduleReconnect((err && err.message) ? "网络异常：" + err.message : "网络异常");
+        });
+      }).catch(function (err) {
+        if (closed || (err && err.name === "AbortError")) return;
+        scheduleReconnect((err && err.message) ? "网络异常：" + err.message : "网络异常");
+      });
+    }
+    consume();
+    return { close: function () { closed = true; clearStall(); if (reconnectTimer) clearTimeout(reconnectTimer); if (abort) abort.abort(); } };
+  }
+
+  function pushHistory(snap) {
+    METRICS.forEach(function (m) {
+      var list = (S.history[m.key] || []).concat([m.pick(snap)]);
+      S.history[m.key] = list.length > HISTORY_LIMIT ? list.slice(list.length - HISTORY_LIMIT) : list;
+    });
+  }
+
+  /* ───────── 启动 ───────── */
+  buildGrid();
+  renderClock(); setInterval(renderClock, 1000);
+  renderStatus();
+  var handle = openLiveStats();
+  window.addEventListener("beforeunload", function () { handle.close(); });
+})();
+});
+</script>
+</body>
+</html>

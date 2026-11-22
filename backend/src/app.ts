@@ -10,6 +10,7 @@ import { getQueueStats } from './mq/consumer.js';
 import { redisStats } from './db/redis.js';
 import passport from './auth/passport.js';
 import { imRouter } from './api/imRouter.js';
+import { imAgentRouter } from './api/imAgentRouter.js';
 import { statsRouter } from './api/statsRouter.js';
 
 export const app = express();
@@ -79,6 +80,7 @@ app.get('/v1/health', (_req, res) => res.status(200).json({
 app.use('/v1', api);
 app.use('/v1', seckillRouter);
 app.use('/v1', imRouter);
+app.use('/v1', imAgentRouter);
 app.use('/v1', statsRouter);
 app.use((_req, _res, next) => next(new ApiError(404,20016,'接口不存在')));
 app.use(errors);

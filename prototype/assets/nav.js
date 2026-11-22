@@ -17,6 +17,8 @@
     agency: [
       { group: "经营概览", items: [
         { key: "dashboard", label: "旅行社工作台", href: "agency-dashboard.html", icon: "grid", perm: "order:manage:query" },
+        { key: "live-desk", label: "在线客服", href: "agency-live-desk.html", icon: "message", perm: "im:agent:query" },
+        { key: "big-screen", label: "实时大屏", href: "agency-big-screen.html", icon: "chart", perm: "analytics:live:query" },
         { key: "ai", label: "AI 智能规划", href: "agency-ai-plan.html", icon: "spark", perm: "route:line:add" }
       ]},
       { group: "业务管理", items: [
@@ -60,7 +62,8 @@
     gear: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>',
     chart: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
     shop: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 9l1.5-5h13L20 9"/><path d="M4 9h16v11H4z"/><path d="M9 20v-6h6v6"/></svg>',
-    shield: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"/><path d="M9 12l2 2 4-4"/></svg>'
+    shield: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"/><path d="M9 12l2 2 4-4"/></svg>',
+    message: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.3 8.9 8.9 0 0 1-3.9-.9L3 20l1.2-4.3a8 8 0 0 1-1.2-4.2A8.4 8.4 0 0 1 11.5 3a8.4 8.4 0 0 1 9.5 8.5z"/><path d="M8.5 10.5h7M8.5 14h4.5"/></svg>'
   };
 
   function esc(s) { return String(s == null ? "" : s); }

@@ -20,7 +20,7 @@ const SCRIPT_DIR = path.resolve(process.cwd(), '../database');
 const FILES = [
   '01_schema.sql', '02_seed.sql', '04_api_v1.sql', '05_rbac_schema.sql', '06_route_stock.sql',
   '07_dict.sql', '07_web_extension.sql', '08_rbac_complete.sql', '10_audit_log.sql',
-  '11_im.sql', '12_im_perm.sql'
+  '11_im.sql', '12_im_perm.sql', '13_im_agent.sql'
 ];
 // 03_sample_queries.sql 为只读样例查询，不在迁移序列中
 // 09_stock_version.sql（秒杀乐观锁）单独处理：其使用 ADD COLUMN IF NOT EXISTS，

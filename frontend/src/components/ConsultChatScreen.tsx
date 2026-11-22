@@ -152,6 +152,32 @@ import { request } from '../api';
    const handleRetry = (msg: ImStoreMessage) => {
      executeSendMessage(msg.content, msg.clientMsgId);
    };
+
+   /**
+    * 发起一条新咨询。
+    *
+    * 新建的会话 assignee_id 为空 → 自动进入 B 端客服工作台的「待接入」队列，
+    * 由客服接入后才建立接待关系（抢单模式，不需要游客预先知道谁值班）。
+    * 之前 C 端只能读第一条已存在的会话，没有「新建」入口，
+    * 导致客服台的待接入池永远是空的 —— 这里补上最小入口。
+    */
+   const [creating, setCreating] = useState(false);
+   const createConsultation = async () => {
+     if (creating) return;
+     setCreating(true);
+     try {
+       const res = await request<any>('/im/conversations', 'POST', {});
+       const newId = String(res?.conversation_id ?? '');
+       if (newId) {
+         setMessages([]);
+         setConvId(newId);
+       }
+     } catch {
+       // 未登录 / 无 im:conv:manage 时静默失败，页面上的登录横幅已经给出指引
+     } finally {
+       setCreating(false);
+     }
+   };
  
    // 快捷咨询话术
    const quickPrompts = useMemo(
@@ -206,6 +232,14 @@ import { request } from '../api';
            </div>
          </div>
          <div className="header-action-tags">
+           <button
+             type="button"
+             className="btn-back-to-ai"
+             disabled={!isLoggedIn || creating}
+             onClick={() => void createConsultation()}
+           >
+             <span>＋</span> {creating ? '创建中…' : '发起咨询'}
+           </button>
            {onBackToAi && (
              <button
                type="button"

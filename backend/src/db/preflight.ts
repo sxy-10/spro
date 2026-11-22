@@ -59,6 +59,10 @@ const SCRIPT_TABLES: { file: string; tables: string[] }[] = [
   {
     file: '12_im_perm.sql',
     tables: ['sys_permission']
+  },
+  {
+    file: '13_im_agent.sql',
+    tables: ['im_agent_status', 'im_quick_reply', 'im_rating']
   }
 ];
 
