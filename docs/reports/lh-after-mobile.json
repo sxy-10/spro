@@ -1,0 +1,23 @@
+{
+  "captureType": "browser-performance-api-fallback",
+  "lighthouseStatus": "blocked",
+  "lighthouseFailure": "The Lighthouse CLI could not be installed because npm registry requests repeatedly failed with ECONNRESET; the cached CLI was incomplete.",
+  "environment": {
+    "url": "http://127.0.0.1:5173/",
+    "mode": "Vite production preview",
+    "browser": "Microsoft Edge",
+    "viewport": "390x844",
+    "runs": 3,
+    "aggregation": "median"
+  },
+  "metrics": {
+    "fcpMs": 76,
+    "lcpMs": 92,
+    "tbtLongTaskEstimateMs": 0,
+    "cls": 0,
+    "speedIndexMs": null,
+    "initialJsEncodedBytes": 84999,
+    "initialJsRawBytes": 246252,
+    "ttfbMs": 3.4
+  }
+}

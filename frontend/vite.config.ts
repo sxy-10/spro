@@ -20,6 +20,21 @@ export default defineConfig(({ mode }) => {
         '@shared': path.resolve(__dirname, 'shared')
       }
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            const normalizedId = id.replace(/\\/g, '/');
+            if (/\/node_modules\/(?:react|react-dom|scheduler)\//.test(normalizedId)) {
+              return 'vendor-react';
+            }
+            if (normalizedId.includes('/node_modules/axios/')) {
+              return 'vendor-http';
+            }
+          }
+        }
+      }
+    },
     server: {
       host: '0.0.0.0',
       port: 5173,

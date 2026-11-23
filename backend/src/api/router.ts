@@ -21,6 +21,8 @@ import { invalidatePolicyCache } from '../auth/casbin.js';
 import { hashPassword, verifyPasswordConstantTime, checkLoginLockout, recordLoginFailure, clearLoginLockout } from '../auth/security.js';
 import { bearerToken, dropCachedUser, dropUserSessions } from '../auth/sessionCache.js';
 import { listDict, isDictType } from '../db/dict.js';
+import { cacheDel } from '../db/redis.js';
+import { getHotRoutes, getHotSpots } from '../db/warmup.js';
 
 export const api = Router();
 const planner = new TravelPlannerAgent();
@@ -269,6 +271,10 @@ api.post('/auth/login/account', run(async (req, res) => {
 
 api.get('/routes', run(async (req, res) => {
   const p = page(req.query, ['created_at','base_price_rmb','default_days'], { destination: text(100).optional() });
+  if (!p.destination && p.page === 1 && p.size === 20 && p.sort === '-created_at') {
+    reply(res, await getHotRoutes());
+    return;
+  }
   const where = `FROM travel_product WHERE status='ON_SALE'${p.destination ? ' AND destination=?' : ''}`;
   reply(res, await list(pool, `SELECT ${routeFields} ${where}`, `SELECT COUNT(*) total ${where}`, p.destination ? [p.destination] : [], p));
 }));
@@ -290,6 +296,10 @@ api.get('/routes/:id/stock', run(async (req, res) => {
 }));
 api.get('/spots', run(async (req, res) => {
   const p = page(req.query, ['created_at','name','rating'], { city_name: text(50).optional() });
+  if (!p.city_name && p.page === 1 && p.size === 20 && p.sort === '-created_at') {
+    reply(res, await getHotSpots());
+    return;
+  }
   const where = `FROM poi WHERE poi_type='ATTRACTION' AND status='ACTIVE'${p.city_name ? ' AND city_name=?' : ''}`;
   reply(res, await list(pool, `SELECT id,id AS spot_id,name,city_name,address,rating,opening_hours,cover_image_url,created_at ${where}`, `SELECT COUNT(*) total ${where}`, p.city_name ? [p.city_name] : [], p));
 }));
@@ -530,6 +540,7 @@ api.post('/admin/routes', requirePermission('route:line:add'), run(async(req,res
     );
     return {data:rows[0],status:201};
   });
+  await cacheDel('routes:hot');
 }));
 api.patch('/admin/routes/:id', requirePermission('route:line:update'), run(async(req,res)=>{
   const routeId=id.parse(req.params.id);
@@ -575,6 +586,7 @@ api.patch('/admin/routes/:id', requirePermission('route:line:update'), run(async
     );
     return {data:updated[0]};
   });
+  await cacheDel('routes:hot');
 }));
 api.get('/admin/orders', requirePermission('order:manage:query'), run(async(req,res)=>{
   const p=page(req.query,['created_at','total_amount'],{status:z.enum(['CREATED','PAID','CANCELED','COMPLETED','REFUNDED']).optional()});

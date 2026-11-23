@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { request, isLoggedIn, logout } from './api';
 import { useSession } from './hooks/useAuth';
 import { restoreSession } from './lib/auth';
@@ -19,17 +19,18 @@ import {
 } from './mockData';
 import { MobileShell } from './components/MobileShell';
 import { TabBar } from './components/TabBar';
-import { PlanScreen } from './components/PlanScreen';
-import { ChatScreen } from './components/ChatScreen';
-import { ItineraryScreen } from './components/ItineraryScreen';
-import { ExploreScreen } from './components/ExploreScreen';
-import { ConsultChatScreen } from './components/ConsultChatScreen';
-import { ProfileScreen } from './components/ProfileScreen';
-import { AdminScreen } from './components/AdminScreen';
 import { ExportModal } from './components/ExportModal';
 import { ForbiddenScreen } from './components/ForbiddenScreen';
 import { deriveAllowedScreens, deriveVisibleTabs, hasConsoleAccess, isScreenAllowed } from './lib/menuTabs';
 import { refreshPermissions, watchPermissionChanges } from './lib/permissionSync';
+
+const PlanScreen = lazy(() => import('./components/PlanScreen').then(module => ({ default: module.PlanScreen })));
+const ChatScreen = lazy(() => import('./components/ChatScreen').then(module => ({ default: module.ChatScreen })));
+const ItineraryScreen = lazy(() => import('./components/ItineraryScreen').then(module => ({ default: module.ItineraryScreen })));
+const ExploreScreen = lazy(() => import('./components/ExploreScreen').then(module => ({ default: module.ExploreScreen })));
+const ConsultChatScreen = lazy(() => import('./components/ConsultChatScreen').then(module => ({ default: module.ConsultChatScreen })));
+const ProfileScreen = lazy(() => import('./components/ProfileScreen').then(module => ({ default: module.ProfileScreen })));
+const AdminScreen = lazy(() => import('./components/AdminScreen').then(module => ({ default: module.AdminScreen })));
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -477,7 +478,9 @@ export default function App() {
           ) : undefined
         }
       >
-        {renderScreenContent(currentTab)}
+        <Suspense fallback={<div role="status" aria-live="polite">页面加载中…</div>}>
+          {renderScreenContent(currentTab)}
+        </Suspense>
       </MobileShell>
 
       {/* 导出长文弹窗 */}

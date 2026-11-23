@@ -10,7 +10,7 @@ import { waitForRedis } from './db/redis.js';
 import { attachWs } from './im/wsServer.js';
 import { startPresenceJanitor } from './im/presence.js';
 import { logEvent } from './im/protocol.js';
-
+import { warmCache } from './db/warmup.js';
 secret();
 
 /* ------------------------------------------------------------------ *
@@ -89,6 +89,13 @@ const reconcileTimer = setInterval(async () => {
   }
 }, 5 * 60 * 1000);
 reconcileTimer.unref();
+
+void warmCache().catch((error: unknown) => {
+  console.error(JSON.stringify({
+    event: 'catalog.cache.warmup_failed',
+    message: error instanceof Error ? error.message : String(error)
+  }));
+});
 
 server.on('close', () => {
   stopStockExpiry();

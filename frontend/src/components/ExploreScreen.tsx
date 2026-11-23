@@ -143,7 +143,7 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
         <div className="map-curved-river"></div>
 
         {/* 地图上的灵感图钉气泡 */}
-        {filteredPins.map((pin) => (
+        {filteredPins.map((pin, index) => (
           <div
             key={pin.id}
             className={`map-inspiration-bubble ${selectedPin?.id === pin.id ? 'bubble-pin-active' : ''}`}
@@ -152,9 +152,26 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
             role="button"
             tabIndex={0}
             aria-label={`${pin.title} · ${pin.cityName}`}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                handlePinClick(pin);
+              }
+            }}
           >
             <div className="bubble-avatar-box">
-              <div className="avatar-mini-circle"></div>
+              <img
+                className="avatar-mini-circle"
+                src={`/spots/spot-${(index % 3) + 1}-960.webp`}
+                srcSet={`/spots/spot-${(index % 3) + 1}-480.webp 480w, /spots/spot-${(index % 3) + 1}-960.webp 960w, /spots/spot-${(index % 3) + 1}-1440.webp 1440w`}
+                sizes="24px"
+                width={24}
+                height={24}
+                loading="lazy"
+                decoding="async"
+                alt=""
+                style={{ objectFit: 'cover' }}
+              />
             </div>
             <div className="bubble-text-content">
               <div className="bubble-pin-title">{pin.title}</div>
