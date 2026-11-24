@@ -1,0 +1,39 @@
+server:
+  port: 8080
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        name: JSESSIONID
+        http-only: true
+        same-site: lax
+        path: /
+        # 生产开启 HTTPS 后置为 true（本地 http 调试必须为 false，否则收不到 Cookie）
+        secure: false
+
+spring:
+  application:
+    name: admin-web
+  profiles:
+    # 骨架期默认 dev，才有 /api/auth/dev-login 这个临时登录口；联调真实登录后删除该 profile 与控制器
+    default: dev
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+app:
+  node:
+    # Node 业务 API（唯一写库方）
+    base-url: http://127.0.0.1:3001
+    connect-timeout: 2s
+    read-timeout: 3s
+  security:
+    # 浏览器侧只持会话 Cookie，不得下发任何 token
+    session-header-name: X-Trace-Id
+
+logging:
+  level:
+    com.example.adminweb: INFO
+    org.springframework.security: INFO
