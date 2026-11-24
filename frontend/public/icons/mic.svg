@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="语音">
+  <title>语音</title>
+  <rect x="8.8" y="3.5" width="6.4" height="11.2" rx="3.2" ry="3.2" fill="none" />
+  <path d="M5.8 11.5a6.2 6.2 0 0 0 12.4 0" fill="none" />
+  <line x1="12" y1="17.7" x2="12" y2="21" fill="none" />
+
+</svg>

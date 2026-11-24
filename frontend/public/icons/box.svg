@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="旅游产品">
+  <title>旅游产品</title>
+  <path d="M12 3l8 4.2v9.6L12 21l-8-4.2V7.2z" fill="none" />
+  <path d="M4 7.2l8 4.2 8-4.2" fill="none" />
+  <line x1="12" y1="11.4" x2="12" y2="21" fill="none" />
+
+</svg>

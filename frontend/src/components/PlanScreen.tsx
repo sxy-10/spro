@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Icon } from './Icon';
 
 /** 精选案例展示项元数据 */
 export interface ShowcaseRouteItem {
@@ -86,7 +87,7 @@ export const PlanScreen: React.FC<PlanScreenProps> = ({
           onClick={handleQuickNewPlan}
           aria-label="新建出行行程定制"
         >
-          <span className="plus-symbol">+</span>
+          <Icon name="plus" size={15} className="plus-symbol" />
           <span>新建</span>
         </button>
       </div>
@@ -121,13 +122,6 @@ export const PlanScreen: React.FC<PlanScreenProps> = ({
         </div>
 
         <div className="showcase-card-cover">
-          <div className="showcase-scenery-art" aria-hidden="true">
-            <span className="scenery-item scenery-tree">🌲</span>
-            <span className="scenery-item scenery-tree">🌲</span>
-            <span className="scenery-item scenery-mountain">⛰️</span>
-            <span className="scenery-item scenery-tree">🌲</span>
-            <span className="scenery-item scenery-tree">🌲</span>
-          </div>
           <div className="cover-nature-overlay">
             <span className="cover-badge-text">{currentShowcase.badge}</span>
           </div>
@@ -135,10 +129,10 @@ export const PlanScreen: React.FC<PlanScreenProps> = ({
 
         <div className="showcase-card-footer">
           <div className="showcase-footer-left">
-            <span className="shield-icon-mini">🛡️</span>
+            <Icon name="shield" size={14} className="shield-icon-mini" />
             <span className="judge-text-mini">{currentShowcase.judgeHighlight}</span>
           </div>
-          <span className="showcase-cutin-prompt">立即生成方案 ➔</span>
+          <span className="showcase-cutin-prompt">立即生成方案 <Icon name="arrow-right" size={13} /></span>
         </div>
       </div>
 

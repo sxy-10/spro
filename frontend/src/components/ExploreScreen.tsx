@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ExploreMapPin, ExploreCollectionItem } from '../types';
+import { Icon } from './Icon';
 
 interface ExploreScreenProps {
   pins: ExploreMapPin[];
@@ -82,7 +83,7 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
                 aria-label="选择探索地区"
               >
                 <span>{currentRegion}</span>
-                <span className="down-caret">⌵</span>
+                <Icon name="chevron-down" size={14} className="down-caret" />
               </button>
 
               {isRegionMenuOpen && (
@@ -99,7 +100,7 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
                       }}
                     >
                       <span>{item.label}</span>
-                      {currentRegion === item.label && <span className="check-mark">✓</span>}
+                      {currentRegion === item.label && <Icon name="check" size={14} className="check-mark" />}
                     </button>
                   ))}
                 </div>
@@ -112,10 +113,7 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
               aria-label="搜索探索目的地"
               onClick={() => setIsSearchActive(true)}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
+              <Icon name="search" size={18} />
             </button>
           </>
         ) : (
@@ -128,8 +126,8 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
               className="explore-search-input"
               autoFocus
             />
-            <button type="button" className="btn-close-search" onClick={() => { setIsSearchActive(false); setSearchKeyword(''); }}>
-              ✕
+            <button type="button" className="btn-close-search" onClick={() => { setIsSearchActive(false); setSearchKeyword(''); }} aria-label="关闭搜索">
+              <Icon name="close" size={16} />
             </button>
           </div>
         )}
@@ -188,8 +186,8 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
                 <span className="popover-city-badge">{selectedPin.cityName}</span>
                 <h4 className="popover-pin-title">{selectedPin.title}</h4>
               </div>
-              <button type="button" className="btn-close-popover" onClick={() => setSelectedPin(null)}>
-                ✕
+              <button type="button" className="btn-close-popover" onClick={() => setSelectedPin(null)} aria-label="关闭地点详情">
+                <Icon name="close" size={15} />
               </button>
             </div>
 
@@ -211,8 +209,8 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
                 className="btn-popover-plan-action"
                 onClick={() => handleConfirmPlanPin(selectedPin)}
               >
-                <span>🤖 让智能体排进路线</span>
-                <span>➔</span>
+                <span><Icon name="robot" size={15} /> 让智能体排进路线</span>
+                <Icon name="arrow-right" size={16} />
               </button>
             </div>
           </div>
@@ -256,7 +254,7 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({
                   )}
                 </div>
 
-                <div className="collection-card-arrow">➔</div>
+                <div className="collection-card-arrow"><Icon name="arrow-right" size={15} /></div>
               </div>
             ))}
           </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { sendSeckill, pollSeckillResult } from '../lib/http';
+import { Icon } from './Icon';
 
 export type SeckillButtonStatus =
   | 'WAITING'     // 活动未开始，倒计时
@@ -173,7 +174,7 @@ export const SeckillButton: React.FC<SeckillButtonProps> = ({
       case 'SUCCESS':
         return (
           <span className="seckill-btn-content">
-            <span>🎉 抢购成功！</span>
+            <span><Icon name="check-circle" size={16} /> 抢购成功！</span>
           </span>
         );
       case 'SOLD_OUT':
@@ -198,7 +199,7 @@ export const SeckillButton: React.FC<SeckillButtonProps> = ({
       default:
         return (
           <span className="seckill-btn-content">
-            <span className="seckill-flash-icon">⚡</span>
+            <span className="seckill-flash-icon"><Icon name="flame" size={16} /></span>
             <span>立即秒杀抢购 ({priceText}/人)</span>
           </span>
         );

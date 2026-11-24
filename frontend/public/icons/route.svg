@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="路线">
+  <title>路线</title>
+  <circle cx="6" cy="18.3" r="2.5" fill="none" />
+  <circle cx="18" cy="5.7" r="2.5" fill="none" />
+  <path d="M8.3 16.2c2.7-.8 4.2-2.5 4.2-5.4 0-1.8.9-3 2.8-3.8" fill="none" />
+
+</svg>

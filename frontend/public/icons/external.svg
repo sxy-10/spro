@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="外链">
+  <title>外链</title>
+  <line x1="14" y1="4" x2="20" y2="4" fill="none" />
+  <line x1="20" y1="4" x2="20" y2="10" fill="none" />
+  <line x1="20" y1="4" x2="11" y2="13" fill="none" />
+  <path d="M18 13.5v4.2a2.3 2.3 0 0 1-2.3 2.3H6.3A2.3 2.3 0 0 1 4 17.7V8.3A2.3 2.3 0 0 1 6.3 6h4.2" fill="none" />
+
+</svg>

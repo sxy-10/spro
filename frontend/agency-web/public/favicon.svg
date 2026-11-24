@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>旅行规划智能体</title>
+  <rect x="2" y="2" width="60" height="60" rx="17" fill="#25582c"/>
+  <path d="M12 45.5 26.5 24l9 13.2 5-7.2L52 45.5z" fill="none" stroke="#ffffff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="44.5" cy="19" r="5.5" fill="#eaf5ed"/>
+  <path d="M19 49c6-3.2 11-3.2 17 0" fill="none" stroke="#eaf5ed" stroke-width="3" stroke-linecap="round"/>
+</svg>

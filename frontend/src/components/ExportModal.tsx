@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Icon } from './Icon';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -26,8 +27,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       <div className="export-modal-container" onClick={(e) => e.stopPropagation()}>
         <div className="export-modal-header">
           <h3 className="export-modal-title">导出出行方案</h3>
-          <button type="button" className="btn-close-modal" onClick={onClose}>
-            ✕
+          <button type="button" className="btn-close-modal" onClick={onClose} aria-label="关闭导出窗口">
+            <Icon name="close" size={16} />
           </button>
         </div>
 
@@ -40,7 +41,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             关闭
           </button>
           <button type="button" className="btn-modal-copy" onClick={handleCopy}>
-            {copied ? '✓ 已复制到剪贴板' : '复制长文排版'}
+            {copied ? (
+              <>
+                <Icon name="check-circle" size={15} /> 已复制到剪贴板
+              </>
+            ) : (
+              <>
+                <Icon name="copy" size={15} /> 复制长文排版
+              </>
+            )}
           </button>
         </div>
       </div>

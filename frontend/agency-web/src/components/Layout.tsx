@@ -13,6 +13,7 @@
 
 import React from 'react';
 import { hasPermissionCode, type SessionSnapshot } from '@auth';
+import { Icon, type IconName } from './Icon';
 
 export type PageKey = 'livedesk' | 'bigscreen';
 
@@ -21,7 +22,7 @@ export interface MenuItem {
   label: string;
   code: string;
   desc: string;
-  icon: string;
+  icon: IconName;
 }
 
 /** 菜单唯一真相源：label + 权限码 + 页面描述，App.tsx 与 Layout.tsx 共用 */
@@ -31,14 +32,14 @@ export const MENU_ITEMS: MenuItem[] = [
     label: '在线客服',
     code: 'im:conv:manage',
     desc: '游客咨询会话处理',
-    icon: '💬'
+    icon: 'message'
   },
   {
     key: 'bigscreen',
     label: '实时大屏',
     code: 'analytics:live:query',
     desc: '运营指标实时监控',
-    icon: '📊'
+    icon: 'chart'
   }
 ];
 
@@ -66,7 +67,7 @@ export const Layout: React.FC<LayoutProps> = ({ session, activePage, onNavigate,
     <div className="layout">
       <aside className="layout-sidebar">
         <div className="layout-brand">
-          <div className="brand-mark">🧭</div>
+          <div className="brand-mark"><Icon name="compass" size={22} /></div>
           <div>
             <div className="brand-title">旅行社交付系统</div>
             <div className="brand-sub">B 端工作台 · 第 5 棒</div>
@@ -82,7 +83,7 @@ export const Layout: React.FC<LayoutProps> = ({ session, activePage, onNavigate,
               onClick={() => onNavigate(item.key)}
               title={`权限码 ${item.code}`}
             >
-              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-icon"><Icon name={item.icon} size={18} /></span>
               <span className="nav-text">
                 <span className="nav-label">{item.label}</span>
                 <span className="nav-desc">{item.desc}</span>
@@ -103,7 +104,7 @@ export const Layout: React.FC<LayoutProps> = ({ session, activePage, onNavigate,
             </div>
           </div>
           <button type="button" className="layout-logout" onClick={onLogout}>
-            退出登录
+            <Icon name="logout" size={15} /> 退出登录
           </button>
         </div>
       </aside>

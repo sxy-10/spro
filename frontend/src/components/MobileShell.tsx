@@ -1,4 +1,5 @@
 import React from 'react';
+import { Icon } from './Icon';
 
 interface MobileShellProps {
   children: React.ReactNode;
@@ -33,7 +34,7 @@ export const MobileShell: React.FC<MobileShellProps> = ({
       <div className="mobile-screen-body">
         {blocked ? (
           <div className="screen-guard-blocked" role="alert">
-            <div className="screen-guard-icon" aria-hidden="true">🔒</div>
+            <div className="screen-guard-icon" aria-hidden="true"><Icon name="lock" size={30} /></div>
             <h3 className="screen-guard-title">暂无访问权限</h3>
             <p className="screen-guard-desc">
               当前账号的菜单权限不包含此页面。若权限刚刚调整过，刷新页面或切回前台即可重新加载菜单。

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 山峦 -->
+    <path
+        android:pathData="M27,63 L42,35 L51,49 L57,41 L77,63"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- 山脚步道 -->
+    <path
+        android:pathData="M34,70 C42,65 50,65 59,70"
+        android:fillColor="#00000000"
+        android:strokeColor="#eaf5ed"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round" />
+    <!-- 太阳 -->
+    <path
+        android:pathData="M68.5,29.5 a5.5,5.5 0 1,0 0.1,0"
+        android:fillColor="#eaf5ed" />
+</vector>

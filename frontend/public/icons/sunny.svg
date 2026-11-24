@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="晴天">
+  <title>晴天</title>
+  <circle cx="12" cy="12" r="4.1" fill="none" />
+  <line x1="12" y1="2.6" x2="12" y2="5" fill="none" />
+  <line x1="12" y1="19" x2="12" y2="21.4" fill="none" />
+  <line x1="2.6" y1="12" x2="5" y2="12" fill="none" />
+  <line x1="19" y1="12" x2="21.4" y2="12" fill="none" />
+  <line x1="5.3" y1="5.3" x2="7" y2="7" fill="none" />
+  <line x1="17" y1="17" x2="18.7" y2="18.7" fill="none" />
+  <line x1="18.7" y1="5.3" x2="17" y2="7" fill="none" />
+  <line x1="7" y1="17" x2="5.3" y2="18.7" fill="none" />
+
+</svg>

@@ -4,6 +4,7 @@
  * 登录、注册、找回密码三处共用，避免各自维护一份切换逻辑。
  */
 import { useState } from 'react';
+import { Icon } from './Icon';
 
 interface PasswordInputProps {
   id: string;
@@ -14,27 +15,6 @@ interface PasswordInputProps {
   minLength?: number;
   maxLength?: number;
   disabled?: boolean;
-}
-
-/** 眼睛（密文状态） */
-function EyeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-      <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="12" cy="12" r="2.7" />
-    </svg>
-  );
-}
-
-/** 眼睛加一道斜杠（明文状态） */
-function EyeOffIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-      <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="12" cy="12" r="2.7" />
-      <path d="M4 4l16 16" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 export function PasswordInput({
@@ -72,7 +52,7 @@ export function PasswordInput({
         aria-pressed={visible}
         title={visible ? '点击隐藏密码' : '点击显示明文'}
       >
-        {visible ? <EyeOffIcon /> : <EyeIcon />}
+        <Icon name={visible ? 'eye-off' : 'eye'} size={18} strokeWidth={1.7} />
       </button>
     </div>
   );

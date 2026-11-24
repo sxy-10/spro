@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="行程">
+  <title>行程</title>
+  <rect x="3.2" y="5.2" width="17.6" height="15.2" rx="3" ry="3" fill="none" />
+  <line x1="8" y1="3" x2="8" y2="7" fill="none" />
+  <line x1="16" y1="3" x2="16" y2="7" fill="none" />
+  <line x1="3.2" y1="10.2" x2="20.8" y2="10.2" fill="none" />
+  <line x1="7.6" y1="14" x2="10.4" y2="14" fill="none" />
+  <line x1="13.6" y1="14" x2="16.4" y2="14" fill="none" />
+
+</svg>

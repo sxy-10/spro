@@ -105,7 +105,8 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--theme-brand-green);
-  cursor: pointer;
+  cursor: default;
+  user-select: none;
 }
 * {
   box-sizing: border-box;
@@ -181,6 +182,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transform: translateZ(0);
 }
 
 /* 屏幕主滚动区域 */
@@ -771,7 +773,8 @@ body {
   width: 100%;
   height: 180px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #1b3826 0%, #2f6041 50%, #4a845e 100%);
+  /* 科隆大教堂实景：取景上移到 55%，压掉大片天空，让教堂立面成为画面主体 */
+  background: url('/cologne-960.webp') center 55% / cover no-repeat;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -779,28 +782,6 @@ body {
   box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.25);
   position: relative;
   overflow: hidden;
-}
-
-.showcase-scenery-art {
-  position: absolute;
-  top: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  font-size: 26px;
-  opacity: 0.85;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.scenery-item {
-  display: inline-block;
-  transition: transform 0.2s ease;
-}
-
-.plan-showcase-card:hover .scenery-mountain {
-  transform: scale(1.1);
 }
 
 .cover-badge-text {
@@ -1539,7 +1520,7 @@ body {
   padding: 10px 16px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   z-index: 40;
 }
 
@@ -1570,6 +1551,39 @@ body {
   font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
+}
+
+/* 行程页转化入口：带着当前方案直接找人工顾问 */
+.btn-consult-advisor {
+  height: 42px;
+  padding: 0 10px;
+  background: #fff7ed;
+  color: #b45309;
+  border: 1px solid #fed7aa;
+  border-radius: 21px;
+  font-size: 12.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-consult-advisor:hover {
+  background: #ffedd5;
+}
+
+.quick-prompt-chip.chip-plan-summary {
+  background: #f0f8f3;
+  border-color: #b8dcbf;
+  color: #1e6b37;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* 编辑方案信息弹窗 */
@@ -2216,10 +2230,19 @@ input:checked + .toggle-slider:before {
 .user-avatar-circle {
   cursor: pointer;
   transition: transform 0.15s ease;
+  overflow: hidden;
 }
 
 .user-avatar-circle:hover {
   transform: scale(1.05);
+}
+
+/* 本机图片头像在名片上的圆形展示 */
+.user-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .pill-login-btn {
@@ -2415,18 +2438,19 @@ input:checked + .toggle-slider:before {
 
 /* 统一全屏遮罩与模态抽屉底框 */
 .profile-modal-backdrop {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(14, 28, 19, 0.45);
-  backdrop-filter: blur(2px);
-  z-index: 100;
+  background: rgba(14, 28, 19, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 200;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   animation: backdropFadeIn 0.2s ease-out;
+  touch-action: none;
 }
 
 @keyframes backdropFadeIn {
@@ -2445,6 +2469,7 @@ input:checked + .toggle-slider:before {
   box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.15);
   animation: sheetSlideUp 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
   overflow: hidden;
+  touch-action: pan-y;
 }
 
 @keyframes sheetSlideUp {
@@ -2508,6 +2533,8 @@ input:checked + .toggle-slider:before {
   overflow-y: auto;
   max-height: 480px;
   padding-right: 2px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .modal-empty-state {
@@ -3075,6 +3102,8 @@ input:checked + .toggle-slider:before {
 .avatar-options-grid {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .avatar-option-pill {
@@ -3088,12 +3117,51 @@ input:checked + .toggle-slider:before {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+  overflow: hidden;
+  color: #5b7364;
+  transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
 .avatar-option-pill.active {
   border-color: #1e6b37;
   background: #eef8f1;
   transform: scale(1.08);
+}
+
+/* 本机图片头像：圆形裁切 */
+.avatar-option-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.avatar-upload-pill {
+  background: #eef5f0;
+  border: 2px dashed #9dc2aa;
+}
+
+.avatar-upload-pill.active {
+  border-style: solid;
+}
+
+.avatar-upload-pill:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+/* 隐藏原生 file input，仅由「+」按钮触发 */
+.avatar-file-input {
+  display: none;
+}
+
+.edit-form-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #7e9186;
+  line-height: 1.4;
 }
 
 .profile-edit-input {
@@ -4008,4 +4076,61 @@ input:checked + .toggle-slider:before {
 .consult-send-button:disabled {
   background: #cfd9d2;
   cursor: not-allowed;
+}
+
+/* ==================== 旅迹图标系统适配 ==================== */
+/* 图标统一继承 currentColor；以下规则只处理对齐与间距，不改变语义样式。 */
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.modal-title-icon {
+  margin-right: 8px;
+  vertical-align: -3px;
+}
+
+.btn-modal-copy,
+.showcase-cutin-prompt,
+.btn-chat-send,
+.mode-btn-icon,
+.ai-wand-icon,
+.shield-icon,
+.shield-icon-mini,
+.flash-flame,
+.seckill-flash-icon,
+.booking-header-icon,
+.advisor-avatar-icon,
+.bubble-avatar,
+.screen-guard-icon,
+.kpi-icon-bell,
+.credential-box-title,
+.card-arrow-mini,
+.down-caret,
+.check-mark,
+.corner-arrow-icon,
+.collection-card-arrow,
+.entrance-arrow,
+.btn-chat-plus,
+.btn-mic-icon,
+.btn-close-modal,
+.btn-modal-close,
+.btn-close-popover,
+.btn-close-search,
+.btn-close-edit-modal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  vertical-align: middle;
+}
+
+.status-label {
+  display: inline-flex;
+  align-items: center;
 }

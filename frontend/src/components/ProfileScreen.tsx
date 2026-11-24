@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { BookingScreen } from './BookingScreen';
+import { Icon } from './Icon';
 import {
   ProfileFavoriteItem,
   ProfileSubscriptionItem,
@@ -27,6 +28,43 @@ interface ProfileScreenProps {
 }
 
 const AVATAR_EMOJI_OPTIONS = ['🐼', '🏔️', '🎒', '✈️', '🌊', '🧳'];
+
+/** 头像最长边像素。localStorage 只有 5MB，原图直接存会写爆，统一缩到 256 */
+const AVATAR_MAX_EDGE = 256;
+
+/** 判断本地存的是本机图片（data URL）还是内置 emoji */
+const isImageAvatarValue = (value: string) => value.startsWith('data:image/');
+
+/** 读取本机图片并等比缩小为 JPEG data URL */
+function readLocalImageAsAvatar(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, AVATAR_MAX_EDGE / Math.max(image.width, image.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      const context = canvas.getContext('2d');
+      if (!context) {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('canvas 不可用'));
+        return;
+      }
+      // JPEG 不支持透明，先铺白底，避免 PNG 透明区变黑
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(objectUrl);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('图片解码失败'));
+    };
+    image.src = objectUrl;
+  });
+}
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onOpenAdminConsole,
@@ -73,7 +111,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [customAvatar, setCustomAvatar] = useState(() => {
     return localStorage.getItem('profile_avatar') || '🐼';
   });
-
   // 提示信息 Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const showToast = (msg: string) => {
@@ -81,11 +118,47 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     setTimeout(() => setToastMessage(null), 2200);
   };
 
+  // 本机图片上传：隐藏的 file input 由「从本机选择图片」按钮触发
+  const avatarFileInputRef = useRef<HTMLInputElement>(null);
+  const [isReadingAvatarImage, setIsReadingAvatarImage] = useState(false);
+
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // 同一个文件连续选两次也要能触发 change，所以读完就清空
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('请选择图片文件（JPG / PNG / WebP）');
+      return;
+    }
+    setIsReadingAvatarImage(true);
+    try {
+      setCustomAvatar(await readLocalImageAsAvatar(file));
+    } catch {
+      showToast('图片读取失败，请换一张试试');
+    } finally {
+      setIsReadingAvatarImage(false);
+    }
+  };
+
   useEffect(() => {
     if (nickname && nickname !== '旅行家' && !localStorage.getItem('profile_nickname')) {
       setCustomNickname(nickname);
     }
   }, [nickname]);
+
+  // 当弹窗打开时锁定背景滚动，防止蒙层随底层页面上移或漏出底层卡片
+  useEffect(() => {
+    const screenBody = document.querySelector('.mobile-screen-body') as HTMLElement | null;
+    if (!screenBody) return;
+    if (activeModal) {
+      const prevOverflow = screenBody.style.overflow;
+      screenBody.style.overflow = 'hidden';
+      return () => {
+        screenBody.style.overflow = prevOverflow;
+      };
+    }
+  }, [activeModal]);
 
   // 过滤后的收藏列表
   const filteredFavorites = useMemo(() => {
@@ -180,11 +253,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           onClick={() => setActiveModal('settings')}
           title="偏好设置"
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="3" y1="12" x2="21" y2="12"></line>
-            <line x1="3" y1="6" x2="21" y2="6"></line>
-            <line x1="3" y1="18" x2="21" y2="18"></line>
-          </svg>
+          <Icon name="settings" size={22} />
         </button>
       </div>
 
@@ -195,7 +264,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           onClick={() => setActiveModal('editProfile')}
           title="点击更换头像与昵称"
         >
-          <span>{customAvatar}</span>
+          {isImageAvatarValue(customAvatar) ? (
+            <img className="user-avatar-image" src={customAvatar} alt="我的头像" />
+          ) : (
+            <span>{customAvatar}</span>
+          )}
         </div>
         <div className="user-text-info">
           <div className="user-nickname-row">
@@ -206,7 +279,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               onClick={() => setActiveModal('editProfile')}
               aria-label="编辑昵称"
             >
-              ✏️
+              <Icon name="edit" size={14} />
             </button>
           </div>
           <div className="user-membership-badge">
@@ -253,7 +326,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         <div className="card-inner-header">
           <div className="footprint-main-title">
             <span>我的足迹</span>
-            <span className="card-arrow-mini">➔</span>
+            <Icon name="arrow-right" size={14} className="card-arrow-mini" />
           </div>
           <div className="footprint-subtitle">
             已点亮 1 个国家，{footprints.length} 个城市 · {visitedProvinces.length} 个省份
@@ -284,7 +357,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       >
         <div className="collection-card-title">
           <span>我的采集 · {collectionPasses.length}</span>
-          <span className="card-arrow-mini">➔</span>
+          <Icon name="arrow-right" size={14} className="card-arrow-mini" />
         </div>
         <div className="collection-card-desc">
           景点纪念票根、电子手账徽章与行程判官认证文件
@@ -310,23 +383,19 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <div className="entrance-title">旅行社智能体管理中台</div>
             <div className="entrance-desc">查看全网行程并发、转化漏斗与人设引擎</div>
           </div>
-          <div className="entrance-arrow">➔</div>
+          <div className="entrance-arrow"><Icon name="arrow-right" size={16} /></div>
         </div>
       )}
 
       {/* 登录/退出登录按钮 */}
       {isLoggedIn ? (
         <button type="button" className="profile-logout-button" onClick={onLogout}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-            <polyline points="16 17 21 12 16 7" />
-            <line x1="21" y1="12" x2="9" y2="12" />
-          </svg>
+          <Icon name="logout" size={15} />
           <span>退出登录</span>
         </button>
       ) : (
         <button type="button" className="profile-login-button" onClick={onOpenLogin}>
-          <span>🔑 登录 / 注册账号（同步云端资产）</span>
+          <span><Icon name="lock" size={15} /> 登录 / 注册账号（同步云端资产）</span>
         </button>
       )}
 
@@ -338,10 +407,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <div className="profile-modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header-row">
               <div className="modal-title-box">
-                <h3 className="modal-title">⭐ 我的收藏</h3>
+                <h3 className="modal-title"><Icon name="star" size={17} className="modal-title-icon" />我的收藏</h3>
                 <span className="modal-badge-count">{favorites.length} 个灵感</span>
               </div>
-              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)}>✕</button>
+              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)} aria-label="关闭弹窗"><Icon name="close" size={16} /></button>
             </div>
 
             {/* 分类过滤 Tab */}
@@ -384,8 +453,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                         className="btn-plan-fav"
                         onClick={() => handleLaunchAgent(item.planPrompt)}
                       >
-                        <span>🤖 让智能体规划</span>
-                        <span>➔</span>
+                        <span><Icon name="sparkles" size={14} /> 让智能体规划</span>
+                        <Icon name="arrow-right" size={14} />
                       </button>
                     </div>
                   </div>
@@ -404,12 +473,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <div className="profile-modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header-row">
               <div className="modal-title-box">
-                <h3 className="modal-title">🔔 我的订阅与实时预警雷达</h3>
+                <h3 className="modal-title"><Icon name="bell" size={17} className="modal-title-icon" />我的订阅与实时预警雷达</h3>
                 <span className="modal-badge-count">
                   {subscriptions.filter((s) => s.enabled).length} 个开启中
                 </span>
               </div>
-              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)}>✕</button>
+              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)} aria-label="关闭弹窗"><Icon name="close" size={16} /></button>
             </div>
 
             <p className="modal-intro-text">
@@ -436,14 +505,18 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   <p className="sub-card-desc">{sub.description}</p>
                   <div className="sub-card-footer">
                     <span className={`sub-status-indicator ${sub.enabled ? 'active' : 'inactive'}`}>
-                      {sub.enabled ? '● 正在后台实时监控' : '○ 监控已暂停'}
+                      {sub.enabled ? (
+                        <><span className="status-dot" style={{ background: '#10b981' }} />正在后台实时监控</>
+                      ) : (
+                        <><span className="status-dot" style={{ background: '#9ca3af' }} />监控已暂停</>
+                      )}
                     </span>
                     <button
                       type="button"
                       className="btn-check-radar"
                       onClick={() => handleLaunchAgent(sub.checkPrompt)}
                     >
-                      <span>查看今日情报 ➔</span>
+                      <span>查看今日情报 <Icon name="arrow-right" size={13} /></span>
                     </button>
                   </div>
                 </div>
@@ -461,10 +534,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <div className="profile-modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header-row">
               <div className="modal-title-box">
-                <h3 className="modal-title">🗺️ 我的旅行足迹</h3>
+                <h3 className="modal-title"><Icon name="map" size={17} className="modal-title-icon" />我的旅行足迹</h3>
                 <span className="modal-badge-count">{footprints.length} 个城市</span>
               </div>
-              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)}>✕</button>
+              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)} aria-label="关闭弹窗"><Icon name="close" size={16} /></button>
             </div>
 
             <div className="footprint-stats-summary-bar">
@@ -553,10 +626,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <div className="profile-modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header-row">
               <div className="modal-title-box">
-                <h3 className="modal-title">🏷️ 我的采集与电子票夹</h3>
+                <h3 className="modal-title"><Icon name="ticket" size={17} className="modal-title-icon" />我的采集与电子票夹</h3>
                 <span className="modal-badge-count">{collectionPasses.length} 张凭证</span>
               </div>
-              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)}>✕</button>
+              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)} aria-label="关闭弹窗"><Icon name="close" size={16} /></button>
             </div>
 
             <p className="modal-intro-text">
@@ -591,7 +664,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
             {selectedPass && (
               <div className="pass-expanded-credential">
-                <div className="credential-box-title">🛡️ 智能凭证链验真信息</div>
+                <div className="credential-box-title"><Icon name="shield" size={15} /> 智能凭证链验真信息</div>
                 <div className="credential-row">
                   <span>凭据唯一识别号：</span>
                   <code>{selectedPass.serialNumber}</code>
@@ -623,8 +696,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         <div className="profile-modal-backdrop" onClick={() => setActiveModal(null)}>
           <div className="profile-modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header-row">
-              <h3 className="modal-title">⚙️ 偏好设置与系统</h3>
-              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)}>✕</button>
+              <h3 className="modal-title"><Icon name="settings" size={17} className="modal-title-icon" />偏好设置与系统</h3>
+              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)} aria-label="关闭弹窗"><Icon name="close" size={16} /></button>
             </div>
 
             <div className="settings-section-block">
@@ -698,7 +771,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <div className="settings-section-block">
               <div className="settings-section-title">系统与缓存</div>
               <button type="button" className="btn-clean-cache-action" onClick={handleClearCache}>
-                <span>🗑️ 清理本地行程缓存与配置</span>
+                <span><Icon name="trash" size={15} /> 清理本地行程缓存与配置</span>
               </button>
               <div className="app-version-footer">
                 旅行智能体 & 行程判官引擎 v2.4.0 (Build 20261115)
@@ -715,14 +788,29 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         <div className="profile-modal-backdrop" onClick={() => setActiveModal(null)}>
           <div className="profile-modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header-row">
-              <h3 className="modal-title">✏️ 编辑个人资料</h3>
-              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)}>✕</button>
+              <h3 className="modal-title"><Icon name="edit" size={17} className="modal-title-icon" />编辑个人资料</h3>
+              <button type="button" className="btn-modal-close" onClick={() => setActiveModal(null)} aria-label="关闭弹窗"><Icon name="close" size={16} /></button>
             </div>
 
             <div className="edit-profile-form">
               <div className="edit-avatar-group">
-                <label className="edit-form-label">选择头像标识</label>
+                <label className="edit-form-label">选择头像</label>
                 <div className="avatar-options-grid">
+                  {/* 本机图片：已选时展示为第一个可点选的圆形缩略图 */}
+                  <button
+                    type="button"
+                    className={`avatar-option-pill avatar-upload-pill ${isImageAvatarValue(customAvatar) ? 'active' : ''}`}
+                    onClick={() => avatarFileInputRef.current?.click()}
+                    disabled={isReadingAvatarImage}
+                    title="从本机选择图片"
+                    aria-label="从本机选择头像图片"
+                  >
+                    {isImageAvatarValue(customAvatar) ? (
+                      <img className="avatar-option-image" src={customAvatar} alt="当前头像" />
+                    ) : (
+                      <Icon name="plus" size={18} />
+                    )}
+                  </button>
                   {AVATAR_EMOJI_OPTIONS.map((av) => (
                     <button
                       key={av}
@@ -734,6 +822,16 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     </button>
                   ))}
                 </div>
+                <input
+                  ref={avatarFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="avatar-file-input"
+                  onChange={handleAvatarFileChange}
+                />
+                <span className="edit-form-hint">
+                  {isReadingAvatarImage ? '正在读取本机图片…' : '点击 + 从本机选择图片，也可以选下面的内置标识'}
+                </span>
               </div>
 
               <div className="edit-field-group">

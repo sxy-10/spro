@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="警告">
+  <title>警告</title>
+  <path d="M12 3.8 21 19.4H3z" fill="none" />
+  <line x1="12" y1="9.5" x2="12" y2="14.2" fill="none" />
+  <circle cx="12" cy="17.1" r="1.05" fill="currentColor" stroke="none" />
+</svg>

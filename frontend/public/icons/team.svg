@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="团队">
+  <title>团队</title>
+  <circle cx="9" cy="8" r="2.7" fill="none" />
+  <circle cx="16.5" cy="9.2" r="2.2" fill="none" />
+  <path d="M3.5 19c.4-3 2.5-4.8 5.5-4.8s5.1 1.8 5.5 4.8" fill="none" />
+  <path d="M15 14.6c2.6-.4 4.7.9 5.3 3.6" fill="none" />
+
+</svg>

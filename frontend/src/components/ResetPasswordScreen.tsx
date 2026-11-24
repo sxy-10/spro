@@ -6,6 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { AUTH_CONFIG } from '../lib/config';
+import { Icon } from './Icon';
 import { ApiError } from '../lib/http';
 import { resetPassword, sendSmsCode } from '../lib/auth';
 import { useCountdown } from '../hooks/useCountdown';
@@ -88,7 +89,7 @@ export function ResetPasswordScreen({ onBack, onSuccess, initialMobile = '' }: R
     return (
       <div className="auth-page">
         <div className="auth-result">
-          <div className="auth-result-icon" aria-hidden="true">✓</div>
+          <div className="auth-result-icon" aria-hidden="true"><Icon name="check-circle" size={34} /></div>
           <h2 className="auth-title">密码已重置</h2>
           <p className="auth-subtitle">为安全起见该账号已登录的其它设备全部下线，请用新密码重新登录。</p>
           <button type="button" className="auth-primary-button" onClick={onSuccess}>

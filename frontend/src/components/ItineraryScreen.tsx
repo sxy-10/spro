@@ -1,5 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { DetailedItinerary } from '../types';
+import { Icon, type IconName } from './Icon';
+
+/** 把数据层遗留的天气 Emoji 映射到统一线性图标，未知值保留原文本。 */
+const weatherIconName = (value?: string): IconName | null => {
+  if (!value) return null;
+  if (value.includes('❄')) return 'snowy';
+  if (value.includes('☀') || value.includes('🌤')) return 'sunny';
+  if (value.includes('☁') || value.includes('⛅')) return 'cloudy';
+  return null;
+};
 
 interface ItineraryScreenProps {
   itinerary: DetailedItinerary;
@@ -8,6 +18,8 @@ interface ItineraryScreenProps {
   onReorderClick: () => void;
   onSaveEdit?: (updated: { title: string; budgetSummaryRmb: number; subTagText: string }) => void;
   isReordering?: boolean;
+  /** 带着当前方案去问人工顾问（转化入口：看完排期当场就能咨询/预订） */
+  onConsultClick?: () => void;
 }
 
 export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
@@ -16,7 +28,8 @@ export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
   onExportClick,
   onReorderClick,
   onSaveEdit,
-  isReordering = false
+  isReordering = false,
+  onConsultClick
 }) => {
   // 初始优先选中 D2（原型设计默认高亮），若该方案无 D2 则自动对齐到首个可用天
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(() => {
@@ -75,7 +88,7 @@ export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
       {/* 顶部导航栏 */}
       <div className="itinerary-top-navbar">
         <button type="button" className="btn-nav-back" onClick={onBackClick}>
-          <span className="back-arrow-symbol">←</span>
+          <Icon name="arrow-left" size={16} className="back-arrow-symbol" />
           <span>返回</span>
         </button>
         <div className="itinerary-screen-title">{itinerary?.title || '旅行规划方案'}</div>
@@ -114,7 +127,7 @@ export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
         <div className="judge-verified-card">
           <div className="judge-verified-left">
             <div className="judge-verified-title">
-              <span className="shield-icon">🛡️</span>
+              <Icon name="shield" size={16} className="shield-icon" />
               <span>{itinerary?.judgeCertification?.statusTitle || '行程判官认证：无硬伤'}</span>
             </div>
             <div className="judge-verified-desc">
@@ -140,7 +153,12 @@ export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
               >
                 <span className="pill-title">{day.dayLabel}</span>
                 <span className="pill-weather">
-                  ({day.temperatureText} {day.weatherIcon})
+                  {day.temperatureText}{' '}
+                  {weatherIconName(day.weatherIcon) ? (
+                    <Icon name={weatherIconName(day.weatherIcon)!} size={13} />
+                  ) : (
+                    day.weatherIcon
+                  )}
                 </span>
               </button>
             );
@@ -187,12 +205,18 @@ export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
       {/* 底部悬浮操作按钮条 */}
       <div className="itinerary-bottom-floating-bar">
         <button type="button" className="btn-ai-reorder" onClick={onReorderClick} disabled={isReordering}>
-          <span className="ai-wand-icon">✨</span>
+          <Icon name="sparkles" size={16} className="ai-wand-icon" />
           <span>{isReordering ? '正在重排排布...' : 'AI 一键重新排布'}</span>
         </button>
         <button type="button" className="btn-export-secondary" onClick={onExportClick}>
           导出方案
         </button>
+        {onConsultClick && (
+          <button type="button" className="btn-consult-advisor" onClick={onConsultClick}>
+            <Icon name="headset" size={15} />
+            <span>咨询此行程</span>
+          </button>
+        )}
       </div>
 
       {/* 行程编辑弹窗 */}
@@ -201,8 +225,8 @@ export const ItineraryScreen: React.FC<ItineraryScreenProps> = ({
           <div className="itinerary-edit-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="edit-modal-header">
               <h3 className="edit-modal-title">编辑行程方案信息</h3>
-              <button type="button" className="btn-close-edit-modal" onClick={() => setIsEditing(false)}>
-                ✕
+              <button type="button" className="btn-close-edit-modal" onClick={() => setIsEditing(false)} aria-label="关闭编辑窗口">
+                <Icon name="close" size={16} />
               </button>
             </div>
 

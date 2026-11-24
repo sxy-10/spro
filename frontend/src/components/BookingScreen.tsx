@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { request } from '../api';
 import { SeckillButton } from './SeckillButton';
+import { Icon } from './Icon';
 
 interface BookingScreenProps {
   defaultMobile?: string;
@@ -109,7 +110,7 @@ export function BookingScreen({ defaultMobile = '', isLoggedIn = true, onOpenLog
     <div className="profile-booking-card">
       <div className="booking-card-header">
         <div className="booking-header-title-box">
-          <span className="booking-header-icon" aria-hidden="true">🎫</span>
+          <span className="booking-header-icon" aria-hidden="true"><Icon name="ticket" size={18} /></span>
           <h3 className="booking-card-title">出行线路快速预订</h3>
         </div>
         {stockLoading ? (
@@ -132,14 +133,14 @@ export function BookingScreen({ defaultMobile = '', isLoggedIn = true, onOpenLog
           className={`mode-toggle-btn ${bookingMode === 'normal' ? 'active' : ''}`}
           onClick={() => { setBookingMode('normal'); setMessage(null); }}
         >
-          <span>🎫 常规预订</span>
+          <span><Icon name="ticket" size={15} /> 常规预订</span>
         </button>
         <button
           type="button"
           className={`mode-toggle-btn seckill-mode ${bookingMode === 'seckill' ? 'active' : ''}`}
           onClick={() => { setBookingMode('seckill'); setMessage(null); }}
         >
-          <span className="flash-flame">⚡</span>
+          <span className="flash-flame"><Icon name="flame" size={16} /></span>
           <span>限时秒杀专区</span>
           <span className="badge-discount-mini">3折起</span>
         </button>
@@ -237,7 +238,7 @@ export function BookingScreen({ defaultMobile = '', isLoggedIn = true, onOpenLog
             <div className="booking-summary-banner seckill-summary">
               <div className="booking-summary-left">
                 <div className="seckill-price-row">
-                  <span className="booking-summary-label">⚡ 秒杀特惠立减</span>
+                  <span className="booking-summary-label"><Icon name="flame" size={14} /> 秒杀特惠立减</span>
                   <span className="original-strike-price">原价 ¥{totalEstimatedPrice}</span>
                 </div>
                 <span className="booking-summary-sub">{people} 位旅客 · 限量 3 折秒杀席位</span>

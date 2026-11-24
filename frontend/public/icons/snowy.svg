@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="雪天">
+  <title>雪天</title>
+  <path d="M8.3 15.8h7.4a3.6 3.6 0 0 0 0-7.2 5.2 5.2 0 0 0-9.8-.9 3.9 3.9 0 0 0 2.4 8.1Z" fill="none" />
+  <line x1="7.5" y1="18.8" x2="9.5" y2="18.8" fill="none" />
+  <line x1="8.5" y1="17.8" x2="8.5" y2="19.8" fill="none" />
+  <line x1="11.5" y1="21.2" x2="13.5" y2="21.2" fill="none" />
+  <line x1="12.5" y1="20.2" x2="12.5" y2="22.2" fill="none" />
+  <line x1="16" y1="18.8" x2="18" y2="18.8" fill="none" />
+  <line x1="17" y1="17.8" x2="17" y2="19.8" fill="none" />
+
+</svg>

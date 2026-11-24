@@ -1271,3 +1271,13 @@ code {
     width: 220px;
   }
 }
+
+/* ==================== 旅迹图标系统适配 ==================== */
+.brand-mark,
+.nav-icon,
+.layout-logout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}

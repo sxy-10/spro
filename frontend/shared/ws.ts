@@ -351,19 +351,30 @@
      }, this.options.heartbeatIntervalMs || 30000);
    }
  
-   /** 发送 sync 帧增量对账补齐 */
-   public syncMissedMessages(convIdHint?: string | number): void {
-     const targetConvId = convIdHint ?? this.options.defaultConvId;
-     if (!targetConvId) return;
-     const lastSeq = this.options.getLastSeq ? this.options.getLastSeq(targetConvId) : 0;
-     this.sendRaw({
-       v: PROTOCOL_VERSION,
-       t: 'sync',
-       convId: String(targetConvId),
-       lastSeq
-     });
-   }
- 
+  /** 发送 sync 帧增量对账补齐 */
+  public syncMissedMessages(convIdHint?: string | number): void {
+    const targetConvId = convIdHint ?? this.options.defaultConvId;
+    if (!targetConvId) return;
+    const lastSeq = this.options.getLastSeq ? this.options.getLastSeq(targetConvId) : 0;
+    this.sendRaw({
+      v: PROTOCOL_VERSION,
+      t: 'sync',
+      convId: String(targetConvId),
+      lastSeq
+    });
+  }
+
+  /**
+   * 切换当前活跃会话。
+   *
+   * 游客新建咨询后会话 ID 会变，断线 sync 与降级轮询都必须跟着切过去，
+   * 否则重连时还在给旧会话补消息，新会话的消息永远拉不到。
+   */
+  public setActiveConversation(convId: string | number): void {
+    this.options.defaultConvId = convId;
+    if (this.status === 'connected') this.syncMissedMessages(convId);
+  }
+
    /** 发送业务消息（msg 帧） */
    public sendMessage(
      convId: string | number,

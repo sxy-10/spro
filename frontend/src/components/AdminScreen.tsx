@@ -2,6 +2,7 @@ import React from 'react';
 import { AdminMetricsData } from '../types';
 import { AuthPermission } from './AuthPermission';
 import { RoleAdminSection } from './admin/RoleAdminSection';
+import { Icon } from './Icon';
 
 interface AdminScreenProps {
   adminData: AdminMetricsData;
@@ -37,7 +38,7 @@ export const AdminScreen: React.FC<AdminScreenProps> = ({
       {/* 核心双数据指标看板 */}
       <div className="admin-kpi-grid">
         <div className="admin-kpi-card">
-          <div className="kpi-icon-bell">🔔</div>
+          <div className="kpi-icon-bell"><Icon name="bell" size={22} /></div>
           <div className="kpi-main-number">{adminData.todayPlanCount.toLocaleString()}</div>
           <div className="kpi-sub-label">今日AI生成行程单数</div>
         </div>

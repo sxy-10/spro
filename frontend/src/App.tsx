@@ -54,6 +54,7 @@ export default function App() {
   // 组员4：VITE_AUTH_PERSIST=1 时，刷新页面用 refresh_token 静默续期
   useEffect(() => {
     let alive = true;
+    localStorage.removeItem('travel_deepseek_api_key');
     void restoreSession().then((restored) => {
       if (alive && restored) setUser(restored);
     });
@@ -96,6 +97,14 @@ export default function App() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportContent, setExportContent] = useState('');
 
+  /**
+   * 进入【智能体】页时默认落在哪个模式。
+   *
+   * 行程页的「咨询此行程」要把用户直接送进人工会话，而不是又回到 AI 对话里点一次；
+   * ChatScreen 每次切页都会重新挂载，所以用这个值作为它的 initialMode 即可。
+   */
+  const [agentInitialMode, setAgentInitialMode] = useState<'ai' | 'consult'>('ai');
+
   // 处理用户在对话页发送需求
   const handleSendMessage = async (userText: string) => {
     const newUserMessage: ChatMessageItem = {
@@ -108,9 +117,6 @@ export default function App() {
     setIsGenerating(true);
 
     try {
-      const storedKey = localStorage.getItem('travel_deepseek_api_key') || undefined;
-
-      // 优先调用后端 DeepSeek / AI 智能体对话核心接口
       try {
         const aiResponse = await request<{
           reply: string;
@@ -121,7 +127,6 @@ export default function App() {
         }>('/ai/chat', 'POST', {
           message: userText,
           history: messages.slice(-6).map((m) => ({ sender: m.sender, content: m.content })),
-          apiKey: storedKey
         });
 
         if (aiResponse?.itinerary) {
@@ -328,6 +333,23 @@ export default function App() {
     }
   };
 
+  /**
+   * AI 侧方案摘要，供「人工顾问」一键带到会话里。
+   *
+   * 直接取 itinerary 当前态 —— 和用户在【行程】页看到的是同一份内容，
+   * 只带标题/周期/预算/路线这几个客服真正需要的信息，不带逐日明细，避免刷屏。
+   */
+  const buildPlanSummary = (): string | undefined => {
+    if (!itinerary?.title) return undefined;
+    return [
+      `【AI 已生成方案，请顾问据此跟进】`,
+      `标题：${itinerary.title}`,
+      `周期：${itinerary.durationSummary}`,
+      `路线：${itinerary.routeText}`,
+      `预估预算：¥${itinerary.budgetSummaryRmb}（${itinerary.subTagText}）`
+    ].join('\n');
+  };
+
   // 渲染单个具体屏幕
   const renderScreenContent = (screenKey: ActiveTabKey) => {
     switch (screenKey) {
@@ -361,6 +383,8 @@ export default function App() {
             isLoading={isGenerating}
             user={user}
             onOpenLogin={() => setShowLoginModal(true)}
+            planSummary={buildPlanSummary()}
+            initialMode={agentInitialMode}
           />
         );
       case 'itinerary':
@@ -372,6 +396,10 @@ export default function App() {
             onReorderClick={handleReorderItinerary}
             onSaveEdit={handleSaveItineraryEdit}
             isReordering={isReordering}
+            onConsultClick={() => {
+              setAgentInitialMode('consult');
+              setCurrentTab('agent');
+            }}
           />
         );
       case 'consult':
@@ -472,7 +500,11 @@ export default function App() {
           currentTab !== 'admin' ? (
             <TabBar
               currentTab={currentTab}
-              onTabChange={(tab) => setCurrentTab(tab)}
+              onTabChange={(tab) => {
+                // 手动点底部「智能体」时回到 AI 模式；「咨询此行程」的入口才带 consult
+                if (tab === 'agent') setAgentInitialMode('ai');
+                setCurrentTab(tab);
+              }}
               tabs={visibleTabs}
             />
           ) : undefined
