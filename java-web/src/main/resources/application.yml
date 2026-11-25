@@ -14,9 +14,8 @@ server:
 spring:
   application:
     name: admin-web
-  profiles:
-    # 骨架期默认 dev，才有 /api/auth/dev-login 这个临时登录口；联调真实登录后删除该 profile 与控制器
-    default: dev
+  # 有意不再设置默认 profile：开发登录口（DevAuthController）已在 S2 删除，
+  # 任何环境都必须走 Node 真实账号 + 图形验证码。
   jackson:
     property-naming-strategy: SNAKE_CASE
     default-property-inclusion: non_null
@@ -25,8 +24,8 @@ spring:
 
 app:
   node:
-    # Node 业务 API（唯一写库方）
-    base-url: http://127.0.0.1:3001
+    # Node 业务 API（唯一写库方）。部署到容器时用环境变量指到服务名。
+    base-url: ${NODE_BASE_URL:http://127.0.0.1:3001}
     connect-timeout: 2s
     read-timeout: 3s
   security:

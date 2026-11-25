@@ -63,6 +63,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_PATHS).permitAll()
                         .requestMatchers("/api/ping", "/api/auth/**").permitAll()
+                        // 埋点允许匿名：与 Node /v1/events 的 optionalAuthenticate 语义一致
+                        .requestMatchers("/api/events").permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(new JsonAuthEntryPoint(objectMapper))

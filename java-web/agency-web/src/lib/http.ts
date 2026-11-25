@@ -18,16 +18,27 @@ export class ApiError extends Error {
     this.status = status
     this.traceId = traceId
   }
+
+  /** 20012 / 401：会话没了，调用方应把用户送回登录页。 */
+  get isUnauthorized(): boolean {
+    return this.status === 401 || this.code === 20012
+  }
+
+  /** 20013 / 403：已登录但越权（或 CSRF 失败）。 */
+  get isForbidden(): boolean {
+    return this.status === 403 || this.code === 20013
+  }
 }
 
 /**
  * 同源请求层：只发 Cookie，不带任何 token，也不做签名。
  * 写请求自动回填 X-XSRF-TOKEN（Spring Security 的 CSRF Cookie 模式）。
  */
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'X-Requested-With': 'XMLHttpRequest',
+    ...extraHeaders,
   }
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -68,5 +79,19 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
+  post: <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
+    request<T>('POST', path, body, headers),
+  put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
+  patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
+}
+
+/** 拼查询串：空值直接丢弃，避免 Node 的 strict 校验报"未知参数"。 */
+export function qs(params: Record<string, string | number | undefined | null>): string {
+  const search = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return
+    search.set(key, String(value))
+  })
+  const text = search.toString()
+  return text ? `?${text}` : ''
 }

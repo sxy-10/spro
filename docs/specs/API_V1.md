@@ -44,6 +44,34 @@ PUT `/users/{id}` 完整资料字段为 nickname、avatar_url（可 null）、de
 
 Node 登录日志、业务操作日志分别写入 `sys_login_log`、`sys_operation_log`；权限变更同时扩展写入 `sys_audit_log`。不写入密码、token、手机号原文、Authorization、签名头或请求体。新迁移：`database/14_logs.sql`、`database/15_seckill_window.sql`。
 
+## Java BFF 接口（java-web，同源 `/api`）
+
+浏览器只访问这一层。全部返回同一包络 `{code,message,data,trace_id}`；认证靠 `JSESSIONID` 会话 Cookie，写请求另需 `X-XSRF-TOKEN`（取自 `XSRF-TOKEN` Cookie）。`/api/events` 允许匿名，其余 `/api/**` 未登录一律 `401 / 20012`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/ping` | 健康探针（公开） |
+| GET | `/api/auth/captcha` | 代理 Node 图形验证码，返回 `captcha_id` + SVG |
+| POST | `/api/auth/login` | 体 `{account,password,captcha_code}`，头 `X-Captcha-Id`；成功后建会话并缓存 menus/buttons |
+| POST | `/api/auth/logout` | 吊销 Node `api_session` 并销毁本地会话 |
+| GET | `/api/me` | `user_id/username/roles/menus/buttons`，正文无任何 token |
+| GET | `/api/agency/dashboard` | 工作台：KPI + 14 天趋势 + Top 线路 + 待办 + 最近订单（一次请求） |
+| GET | `/api/agency/dashboard-metrics` | 大屏只读：固定 4 个数字 `onsale_count/today_orders/pending_confirms/today_amount` + `generated_at`（S4 轮询） |
+| GET | `/api/agency/routes` | 线路列表，`page/size/sort/keyword/status` |
+| POST | `/api/agency/routes` | 新建线路，`base_price_rmb` 可传数字，BFF 转字符串 |
+| PATCH | `/api/agency/routes/{id}` | 改线路（白名单字段：title/destination/default_days/style_tag/base_price_rmb/status/description） |
+| GET | `/api/agency/orders` | 订单列表，`page/size/sort/status/keyword` |
+| GET | `/api/agency/orders/{id}` | 订单详情 + 后端判定的时间线 |
+| POST | `/api/agency/orders/{id}/confirm` | 确认订单，体 `{remark?}`（≤200 字） |
+| GET | `/api/agency/stock/{routeId}` | 某线路未来 14 天名额 |
+| PUT | `/api/agency/stock/{routeId}` | 改名额，体 `{travel_date,total_seats}`；不得低于已锁定+已售出 |
+| GET | `/api/agency/customers` | 客户列表，`page/size/sort/keyword` |
+| GET | `/api/agency/customers/{id}` | 客户详情：画像、历史订单、回访备注 |
+| PUT | `/api/agency/customers/{id}/note` | 保存回访备注（≤500 字，允许清空） |
+| POST | `/api/events` | SPA 埋点透传 Node `/v1/events`，登录态自动补 Bearer |
+
+鉴权分工：**Node 是权限唯一裁决点**（`requireAction`）；Java 只做会话与透传，前端按 `buttons` 里的权限码决定入口与按钮是否渲染。错误映射：Node `10001` → 400、`20012` → 401（同时销毁本地会话）、`20013` → 403；Node 不可达或超时 → `503 / 50300`。
+
 ## 即时通讯接口（阶段 1 骨架）
 
 所有接口都需 Bearer token。`11_im.sql` 创建 `im_conversation`、`im_participant`、`im_message`、`im_device`、`im_read_cursor`；`12_im_perm.sql` 为 TOURIST 授予前三个即时通讯权限，为 AGENCY_ADMIN / AGENT 授予全部四个 IM 权限及实时统计权限。
