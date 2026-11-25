@@ -1,0 +1,91 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD before starting compose}
+      MYSQL_DATABASE: travel_agent_db
+      TZ: UTC
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ../database/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ../database/02_seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+      - ../database/04_api_v1.sql:/docker-entrypoint-initdb.d/04_api_v1.sql:ro
+      - ../database/05_rbac_schema.sql:/docker-entrypoint-initdb.d/05_rbac_schema.sql:ro
+      - ../database/06_route_stock.sql:/docker-entrypoint-initdb.d/06_route_stock.sql:ro
+      - ../database/07_dict.sql:/docker-entrypoint-initdb.d/07_dict.sql:ro
+      - ../database/07_web_extension.sql:/docker-entrypoint-initdb.d/08_web_extension.sql:ro
+      - ../database/08_rbac_complete.sql:/docker-entrypoint-initdb.d/09_rbac_complete.sql:ro
+      - ../database/09_stock_version.sql:/docker-entrypoint-initdb.d/10_stock_version.sql:ro
+      - ../database/10_audit_log.sql:/docker-entrypoint-initdb.d/11_audit_log.sql:ro
+      - ../database/11_im.sql:/docker-entrypoint-initdb.d/12_im.sql:ro
+      - ../database/12_im_perm.sql:/docker-entrypoint-initdb.d/13_im_perm.sql:ro
+      - ../database/13_im_agent.sql:/docker-entrypoint-initdb.d/14_im_agent.sql:ro
+      - ../database/14_logs.sql:/docker-entrypoint-initdb.d/15_logs.sql:ro
+      - ../database/15_seckill_window.sql:/docker-entrypoint-initdb.d/16_seckill_window.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:29093,PLAINTEXT_HOST://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    ports:
+      - "127.0.0.1:9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:3.9.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/scripts/init-topics.sh"]
+    volumes:
+      - ./kafka/init-topics.sh:/scripts/init-topics.sh:ro
+    restart: "no"
+
+volumes:
+  mysql_data:
+  redis_data:
+  kafka_data:

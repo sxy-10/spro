@@ -70,6 +70,30 @@ export async function warmUpAllSeckillStock(): Promise<void> {
   }
 }
 
+/** Fill only missing Redis keys; unlike reconciliation, this never overwrites an in-flight reservation. */
+export async function warmUpMissingSeckillStock(): Promise<{ checked: number; warmed: number }> {
+  const redis = getRedis();
+  if (!redis || !isRedisReady()) throw new Error('redis_unavailable');
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT route_id, travel_date, seckill_total_seats, seckill_sold_seats
+       FROM route_stock WHERE seckill_total_seats > 0`
+  );
+  let warmed = 0;
+  for (const row of rows) {
+    const date = new Date(row.travel_date as string).toISOString().slice(0, 10);
+    const available = Math.max(0, Number(row.seckill_total_seats) - Number(row.seckill_sold_seats));
+    const created = await redis.set(
+      redisKey(stockKeyOf(Number(row.route_id), date)),
+      String(available),
+      'EX',
+      ttlForDate(date),
+      'NX'
+    );
+    if (created === 'OK') warmed += 1;
+  }
+  return { checked: rows.length, warmed };
+}
+
 /**
  * 对账：以 MySQL 为真相，重刷所有秒杀库存 key。
  *

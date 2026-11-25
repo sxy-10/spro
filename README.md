@@ -13,8 +13,8 @@ backend/          Node/Express/TS 业务 API，唯一写库方，监听 :3001
 java-web/         Spring Boot 3.3 BFF + B端/平台方 SPA（一个 jar）
   └─ agency-web/  React 18 + Vite + Ant Design 源码（原 frontend/agency-web 迁入）
 android-app/      C 端 Kotlin 原生 App（本轮新建，交付物）
-database/         SQL 迁移脚本 01→13
-deploy/           docker-compose（mysql/redis/kafka/flink）+ 可选 nginx.conf
+database/         SQL 迁移脚本 01→15（含日志与秒杀窗口）
+deploy/           docker-compose（mysql/redis/kafka）+ Kafka topic 初始化 + 可选 nginx.conf
 docs/             三端实施方案、specs/API_V1.md、plan/ 分工与交接
 prototype/        旧静态原型（旅行社/平台端 18 页），冻结为视觉参照，不再维护
 frontend/src/     C 端 React 参照版（不交付）
@@ -33,16 +33,21 @@ shared-auth/      仅 C 端参照版与旧原型使用，B 端不再引用
 
 ```ini
 DB_HOST=127.0.0.1
-DB_PORT=3307
+DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=<你的密码>
 DB_NAME=travel_agent_db
 JWT_SECRET=<32 位以上随机串>
 PORT=3001
 NODE_ENV=development
-REDIS_DISABLED=1
+REDIS_DISABLED=0
+KAFKA_BROKERS=127.0.0.1:9092
+INTERNAL_API_SECRET=<独立的32位以上随机串>
+INTERNAL_ALLOWED_IPS=127.0.0.1,::1
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:3000,http://127.0.0.1:3000,null   # B 端 SPA 同源经 Java(:8080)，不需要列入
 ```
+
+以上端口对应下方 Docker Compose。若继续使用本机 `mysqlzt`（`127.0.0.1:3307`），将 `DB_PORT` 改回 3307；Kafka/Redis 仍需启动后才能使用秒杀和内部任务。
 
 ### 2.1 接入 DeepSeek 大模型（可选，未配置则自动回退模板引擎）
 
@@ -73,9 +78,11 @@ export DEEPSEEK_API_KEY="sk-你的密钥"
 
 ### 3. 迁移 + 演示数据 + 启动
 
+也可在仓库根目录通过 `deploy/docker-compose.yml` 启动 MySQL、Redis 和 Kafka。先设置环境变量 `DB_PASSWORD`，再运行 `docker compose -f deploy/docker-compose.yml up -d --wait`；服务端 Kafka 地址为 `127.0.0.1:9092`，topics 会由 `kafka-init` 自动建立。MySQL 初始化挂载脚本只在空数据卷首次启动时执行；已有库使用 `backend/scripts/migrate.ts`。
+
 ```bash
 cd backend
-npx tsx scripts/migrate.ts     # 01→02→04→05→06→07_dict→07_web→08→09，幂等可重跑
+npx tsx scripts/migrate.ts     # 01→02→04→05→06→07→08→09→10→11→12→13→14→15
 npx tsx scripts/seedDemo.ts    # 演示账号与数据，幂等可重跑
 npx tsx scripts/seedGuidesTeams.ts  # 导游与团队演示数据（6 导游/7 团队、成员自洽），幂等可重跑
 npx tsx src/server.ts          # API 监听 http://127.0.0.1:3001

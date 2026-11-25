@@ -1,188 +1,90 @@
-/**
- * MQ 消费者（组员3 · 阶段二；阶段六加固）
- *
- * 从 Redis Stream 读秒杀消息，在数据库事务里：
- *   1. 按 req_id 查重（幂等，重复消息直接 ACK 跳过）
- *   2. SELECT route_stock ... FOR UPDATE 行锁
- *   3. 乐观锁 UPDATE：seckill_sold_seats+1, version+1 WHERE version=?
- *   4. INSERT tour_order
- *   5. 写 Redis 结果 + XACK
- *
- * 失败重试 3 次仍失败 → 回补 Redis 库存 + 写 result:failed + 进死信队列 + XACK。
- *
- * ============================ 阶段六修复说明 ============================
- *
- * 原来的实现踩了 Redis Stream 的五个经典坑，任何一个都会让"队列削峰"变成"订单黑洞"：
- *
- * ① **消费者不重连**
- *    `retryStrategy: () => null` + `enableOfflineQueue:false` = 连上过一次之后，
- *    Redis 断一次这条消费者就永远死了：Stream 一直涨，前端一直 pending，日志里什么都没有。
- *    → 改成指数退避重连（永不放弃），并把每次异常写进 stats.lastError。
- *
- * ② **没有 PEL 回收（最致命）**
- *    XREADGROUP 之后、XACK 之前进程崩溃/被杀 → 消息永久留在 pending 列表里，
- *    既不会被重投也不会被删除。用户钱付了，订单没有，而且系统看起来"一切正常"。
- *    → 加了 XAUTOCLAIM 循环：每 30 秒把"空闲超过 60 秒"的消息认领回来重新处理。
- *
- * ③ **消费者名写死 'consumer-1'**
- *    多开一个实例时两个进程同名，共享同一个 PEL：A 的消息被 B 认领、B 的 XACK 记到 A 名下（等于没 ACK）。
- *    → 改成 `${hostname}-${pid}`，多实例天然隔离。
- *
- * ④ **setInterval(1s) 套 BLOCK 2000ms**
- *    周期比阻塞时间短，多个消费循环会叠起来并发跑；加上失败重试是串行 sleep，一条坏消息能卡住整条队列。
- *    → 改成 while 循环 + 批量并发（默认 4）+ 指数退避重试 + 非重试型错误立刻走死信。
- *
- * ⑤ **死信不回补库存 / 结果记录只有 10 分钟**
- *    Redis 预扣成功但落库失败 → 名额被扣掉却卖不出去（库存泄漏）；
- *    结果 key 600 秒就过期，用户过 11 分钟回来查还是"排队中"。
- *    → 进死信前先 INCRBY 回补库存；结果 TTL 拉到 30 分钟，过期后由接口回查 MySQL 兜底。
- * ====================================================================
- */
 import { hostname } from 'node:os';
-import Redis from 'ioredis';
 import { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { pool } from '../db/connection.js';
-import { getRedis, incrBy, isRedisReady, redisKey, waitForRedis } from '../db/redis.js';
-import { SeckillMessage, SECKILL_STREAM, SECKILL_DLQ, publishToDlq } from './producer.js';
+import { getRedis, isRedisReady, redisKey } from '../db/redis.js';
+import { SeckillMessage, publishSeckillRetry, publishToDlq } from './producer.js';
+import {
+  createKafkaAdmin,
+  createKafkaConsumer,
+  publishKafka,
+  SECKILL_DLT_TOPIC,
+  SECKILL_GROUP,
+  SECKILL_RETRY_TOPIC,
+  SECKILL_TOPIC
+} from './kafka.js';
 
-const GROUP_NAME = process.env.SECKILL_GROUP ?? 'seckill-group';
-/** 消费者名必须每个进程不同，否则多实例会共享 PEL（见文件头 ③） */
 const CONSUMER_NAME = `${hostname()}-${process.pid}`;
-
 const RESULT_TTL_SECONDS = Number(process.env.SECKILL_RESULT_TTL_SECONDS ?? 1800);
-const BATCH_SIZE = Number(process.env.SECKILL_CONSUMER_BATCH ?? 20);
-const CONCURRENCY = Math.max(1, Number(process.env.SECKILL_CONSUMER_CONCURRENCY ?? 4));
-const BLOCK_MS = 2000;
-/** 一条消息被认领前允许"无人认领"的空闲时间 */
-const CLAIM_IDLE_MS = Number(process.env.SECKILL_CLAIM_IDLE_MS ?? 60000);
-const RECLAIM_INTERVAL_MS = Number(process.env.SECKILL_RECLAIM_INTERVAL_MS ?? 30000);
-const MAX_ATTEMPTS = Math.max(1, Number(process.env.SECKILL_MAX_ATTEMPTS ?? 3));
-const EMPTY_STREAM_POLL_MS = 200;
+const MAX_RETRIES = 3;
+const RETRY_DELAYS_MS = [1000, 5000, 30000];
+const REFUND_ONCE_SCRIPT = `
+  if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+  local value = redis.call('INCRBY', KEYS[1], ARGV[1])
+  redis.call('SET', KEYS[2], '1', 'EX', 604800)
+  return value
+`;
 
-/** 运行指标：给 /v1/health/queue 和日志用 */
+class PoisonMessageError extends Error {}
+
 const stats = {
   received: 0,
   succeeded: 0,
   duplicated: 0,
   failed: 0,
   dlq: 0,
-  reclaimed: 0,
   lastError: '',
   lastEventAt: 0
 };
 
-export const getConsumerStats = () => ({ ...stats, consumer: CONSUMER_NAME, group: GROUP_NAME });
+export const getConsumerStats = () => ({
+  ...stats,
+  consumer: CONSUMER_NAME,
+  group: SECKILL_GROUP
+});
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * 消费者使用独立连接：BLOCK 读会把连接占住 2 秒，混用业务连接会拖慢所有接口。
- * 重连策略与 db/redis.ts 一致（指数退避、永不放弃）。
- */
-function createConsumerRedis(): Redis {
-  return new Redis({
-    host: process.env.REDIS_HOST || '127.0.0.1',
-    port: Number(process.env.REDIS_PORT) || 6379,
-    password: process.env.REDIS_PASSWORD || undefined,
-    db: Number(process.env.REDIS_DB || 0),
-    lazyConnect: true,
-    maxRetriesPerRequest: 1,
-    enableOfflineQueue: false,
-    connectTimeout: Number(process.env.REDIS_CONNECT_TIMEOUT_MS ?? 1000),
-    retryStrategy: (times: number) => Math.min(200 * 2 ** Math.min(times - 1, 4), 3000),
-    reconnectOnError: (error: Error) => /READONLY|LOADING|MASTERDOWN|TRYAGAIN/.test(error.message)
-  });
-}
-
-/**
- * 创建消费组。
- * 用 '0' 而不是 '$'：'$' 会让"建组之前已经进队列的消息"被永久忽略，
- * 而 '0' 表示从头消费，建组之后的所有消息都不会漏。（组已存在时抛 BUSYGROUP，忽略）
- */
-async function ensureGroup(redis: Redis): Promise<void> {
-  try {
-    await redis.xgroup('CREATE', redisKey(SECKILL_STREAM), GROUP_NAME, '0', 'MKSTREAM');
-    console.log(JSON.stringify({ event: 'seckill.group.created', group: GROUP_NAME }));
-  } catch (error: any) {
-    if (!String(error?.message ?? '').includes('BUSYGROUP')) {
-      console.log(JSON.stringify({ event: 'seckill.group.create_failed', message: error?.message }));
-      throw error;
-    }
-  }
-}
-
-/** 把 Stream 消息数组 [id, [f1,v1,f2,v2...]] 解析成 SeckillMessage */
-function parseMessage(raw: [string, string[]]): { id: string; msg: SeckillMessage } {
-  const [id, fields] = raw;
-  const obj: Record<string, string> = {};
-  for (let i = 0; i < fields.length; i += 2) obj[fields[i]] = fields[i + 1];
-  return {
-    id,
-    msg: {
-      reqId: obj.reqId,
-      userId: Number(obj.userId),
-      routeId: Number(obj.routeId),
-      date: obj.date,
-      people: Number(obj.people)
-    }
-  };
-}
-
 const stockKeyOf = (msg: SeckillMessage) => `stock:${msg.routeId}:${msg.date}`;
 
-/** 写秒杀结果到 Redis，前端轮询读 */
 async function writeResult(reqId: string, status: 'pending' | 'success' | 'failed', orderId?: number): Promise<void> {
   const redis = getRedis();
-  if (!redis || !isRedisReady()) return;
-  try {
-    await redis.set(
-      redisKey(`seckill:result:${reqId}`),
-      JSON.stringify({ status, order_id: orderId ?? null, req_id: reqId }),
-      'EX',
-      RESULT_TTL_SECONDS
-    );
-  } catch (error: any) {
-    console.log(JSON.stringify({ event: 'seckill.result.write_failed', reqId, message: error?.message }));
-  }
+  if (!redis || !isRedisReady()) throw new Error('redis_unavailable_while_recording_seckill_result');
+  await redis.set(
+    redisKey(`seckill:result:${reqId}`),
+    JSON.stringify({ status, order_id: orderId ?? null, req_id: reqId }),
+    'EX',
+    RESULT_TTL_SECONDS
+  );
 }
 
-/** 回补预扣掉的库存（死信 / 落库失败时必须调用，否则名额被吞掉） */
 async function refundStock(msg: SeckillMessage): Promise<void> {
-  const left = await incrBy(stockKeyOf(msg), msg.people);
-  console.log(JSON.stringify({ event: 'seckill.stock.refunded', reqId: msg.reqId, people: msg.people, left }));
+  const redis = getRedis();
+  if (!redis || !isRedisReady()) {
+    throw new Error(`redis_stock_refund_failed:${msg.reqId}`);
+  }
+  await redis.eval(
+    REFUND_ONCE_SCRIPT,
+    2,
+    redisKey(stockKeyOf(msg)),
+    redisKey(`seckill:refund:${msg.reqId}`),
+    String(msg.people)
+  );
 }
 
-interface HandleResult {
-  ok: boolean;
-  /** false = 这个错误重试也没用（如库存不足），直接进死信 */
-  retryable: boolean;
-  error?: string;
-}
-
-/**
- * 处理单条消息。整个"查重 → 锁行 → 乐观锁扣减 → 建单"在一个数据库事务里，
- * 任何一步失败都 rollback，不会出现"扣了名额没建单"。
- */
-async function handleMessage(msg: SeckillMessage): Promise<HandleResult> {
-  // ① 幂等：先查这个 req_id 是否已建过单（uk_order_req 唯一键是最后一道防线）
+async function createOrder(msg: SeckillMessage): Promise<{ ok: boolean; retryable: boolean; orderId?: number; error?: string }> {
   const [existing] = await pool.query<RowDataPacket[]>(
-    'SELECT id FROM tour_order WHERE req_id = ?', [msg.reqId]
+    'SELECT id FROM tour_order WHERE req_id = ? LIMIT 1', [msg.reqId]
   );
   if (existing.length) {
     stats.duplicated += 1;
-    console.log(JSON.stringify({ event: 'seckill.dup.skip', reqId: msg.reqId, orderId: existing[0].id }));
-    await writeResult(msg.reqId, 'success', Number(existing[0].id));
-    return { ok: true, retryable: false };
+    return { ok: true, retryable: false, orderId: Number(existing[0].id) };
   }
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-
-    // ② 锁库存行
     const [stockRows] = await conn.query<RowDataPacket[]>(
       `SELECT seckill_total_seats, seckill_sold_seats, version
-       FROM route_stock WHERE route_id = ? AND travel_date = ? FOR UPDATE`,
+         FROM route_stock WHERE route_id = ? AND travel_date = ? FOR UPDATE`,
       [msg.routeId, msg.date]
     );
     if (!stockRows.length) {
@@ -198,222 +100,228 @@ async function handleMessage(msg: SeckillMessage): Promise<HandleResult> {
       return { ok: false, retryable: false, error: 'seckill_sold_out' };
     }
 
-    // ③ 乐观锁扣减：WHERE version = 读到的版本号
-    const [upd] = await conn.query<ResultSetHeader>(
+    const [updated] = await conn.query<ResultSetHeader>(
       `UPDATE route_stock
-       SET seckill_sold_seats = seckill_sold_seats + ?, version = version + 1
-       WHERE route_id = ? AND travel_date = ? AND version = ?`,
+          SET seckill_sold_seats = seckill_sold_seats + ?, version = version + 1
+        WHERE route_id = ? AND travel_date = ? AND version = ?`,
       [msg.people, msg.routeId, msg.date, version]
     );
-    if (upd.affectedRows !== 1) {
+    if (updated.affectedRows !== 1) {
       await conn.rollback();
       return { ok: false, retryable: true, error: 'version_conflict' };
     }
 
-    // ④ 查产品价格
-    const [prodRows] = await conn.query<RowDataPacket[]>(
+    const [products] = await conn.query<RowDataPacket[]>(
       'SELECT base_price_rmb FROM travel_product WHERE id = ?', [msg.routeId]
     );
-    const price = prodRows.length ? Number(prodRows[0].base_price_rmb) : 0;
-    const orderNo = 'SK' + Date.now() + Math.floor(Math.random() * 10000);
-
-    // ⑤ 建订单
-    const [ins] = await conn.query<ResultSetHeader>(
+    const price = products.length ? Number(products[0].base_price_rmb) : 0;
+    const orderNo = `SK${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    const [inserted] = await conn.query<ResultSetHeader>(
       `INSERT INTO tour_order
         (order_no, user_id, product_id, travel_date, traveler_count, total_amount, status, req_id, is_stock_locked)
        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, 0)`,
       [orderNo, msg.userId, msg.routeId, msg.date, msg.people, price * msg.people, msg.reqId]
     );
-
     await conn.commit();
-    const orderId = ins.insertId;
-    stats.succeeded += 1;
-    console.log(JSON.stringify({ event: 'seckill.order.created', reqId: msg.reqId, orderId }));
-    await writeResult(msg.reqId, 'success', orderId);
-    return { ok: true, retryable: false };
-  } catch (error: any) {
-    try { await conn.rollback(); } catch { /* 连接已断时忽略 */ }
-    // 唯一键冲突 = 并发重投，说明已经建过单了，按成功处理
-    if (error?.code === 'ER_DUP_ENTRY') {
-      const [rows] = await pool.query<RowDataPacket[]>('SELECT id FROM tour_order WHERE req_id = ?', [msg.reqId]);
+    return { ok: true, retryable: false, orderId: inserted.insertId };
+  } catch (error: unknown) {
+    try { await conn.rollback(); } catch { /* The connection may already be closed. */ }
+    if ((error as { code?: string })?.code === 'ER_DUP_ENTRY') {
+      const [rows] = await pool.query<RowDataPacket[]>(
+        'SELECT id FROM tour_order WHERE req_id = ? LIMIT 1', [msg.reqId]
+      );
       if (rows.length) {
-        await writeResult(msg.reqId, 'success', Number(rows[0].id));
-        return { ok: true, retryable: false };
+        stats.duplicated += 1;
+        return { ok: true, retryable: false, orderId: Number(rows[0].id) };
       }
     }
-    console.log(JSON.stringify({ event: 'seckill.order.failed', reqId: msg.reqId, error: error?.message }));
-    return { ok: false, retryable: true, error: String(error?.message ?? error) };
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, retryable: true, error: message };
   } finally {
     conn.release();
   }
 }
 
-/** 带重试 + 死信 + 回补库存的完整处理流程（一条消息走完就 ACK） */
-async function processMessage(redis: Redis, id: string, raw: [string, string[]]): Promise<void> {
-  const { msg } = parseMessage(raw);
-  stats.received += 1;
-  let lastError = '';
-  let ok = false;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const result = await handleMessage(msg);
-    if (result.ok) { ok = true; break; }
-    lastError = result.error ?? 'unknown';
-    if (!result.retryable) break;
-    // 指数退避：200ms → 400ms → 800ms，避免"撞一下就好"的临时错误立刻进死信
-    await sleep(200 * 2 ** (attempt - 1));
-  }
-
+function decodeMessage(value: Buffer | null): SeckillMessage {
+  if (!value) throw new PoisonMessageError('empty_seckill_message');
+  let parsed: Partial<SeckillMessage>;
   try {
-    if (ok) {
-      await redis.xack(redisKey(SECKILL_STREAM), GROUP_NAME, id);
-      stats.lastEventAt = Date.now();
-      return;
-    }
+    parsed = JSON.parse(value.toString()) as Partial<SeckillMessage>;
+  } catch {
+    throw new PoisonMessageError('invalid_seckill_json');
+  }
+  if (
+    typeof parsed.reqId !== 'string' || parsed.reqId.length < 8 || parsed.reqId.length > 64 ||
+    !Number.isSafeInteger(parsed.userId) || Number(parsed.userId) <= 0 ||
+    !Number.isSafeInteger(parsed.routeId) || Number(parsed.routeId) <= 0 ||
+    typeof parsed.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ||
+    !Number.isSafeInteger(parsed.people) || Number(parsed.people) < 1 || Number(parsed.people) > 5
+  ) {
+    throw new PoisonMessageError('invalid_seckill_message');
+  }
+  return parsed as SeckillMessage;
+}
 
-    stats.failed += 1;
-    // 落库彻底失败：先把预扣的库存还回去，再写失败结果、进死信、最后 ACK
-    await refundStock(msg);
-    await writeResult(msg.reqId, 'failed');
-    await publishToDlq(msg, lastError, MAX_ATTEMPTS);
-    await redis.xack(redisKey(SECKILL_STREAM), GROUP_NAME, id);
-    stats.dlq += 1;
+async function handleKafkaMessage(
+  topic: string,
+  value: Buffer | null,
+  attemptHeader: Buffer | string | (Buffer | string)[] | undefined
+): Promise<void> {
+  stats.received += 1;
+  const msg = decodeMessage(value);
+  const rawAttempt = Array.isArray(attemptHeader) ? attemptHeader[0] : attemptHeader;
+  const attempt = Number(rawAttempt?.toString() ?? '0');
+  if (!Number.isInteger(attempt) || attempt < 0 || attempt > MAX_RETRIES) {
+    throw new PoisonMessageError(`invalid_seckill_retry_count:${msg.reqId}`);
+  }
+  if (topic === SECKILL_RETRY_TOPIC && attempt > 0) {
+    await sleep(RETRY_DELAYS_MS[attempt - 1]);
+  }
+
+  const result = await createOrder(msg);
+  if (result.ok) {
+    await writeResult(msg.reqId, 'success', result.orderId);
+    stats.succeeded += 1;
     stats.lastEventAt = Date.now();
-    console.log(JSON.stringify({ event: 'seckill.msg.dlq', reqId: msg.reqId, reason: lastError }));
-  } catch (error: any) {
-    // ACK 失败没关系：消息还在 PEL 里，会被 XAUTOCLAIM 再捞回来（依靠 req_id 幂等）
-    stats.lastError = String(error?.message ?? error);
-    console.log(JSON.stringify({ event: 'seckill.ack_failed', reqId: msg.reqId, message: stats.lastError }));
+    return;
   }
+
+  const error = result.error ?? 'seckill_order_failed';
+  if (result.retryable && attempt < MAX_RETRIES) {
+    await publishSeckillRetry(msg, attempt + 1, error);
+    return;
+  }
+
+  await refundStock(msg);
+  await writeResult(msg.reqId, 'failed');
+  await publishToDlq(msg, error, attempt);
+  stats.failed += 1;
+  stats.dlq += 1;
+  stats.lastEventAt = Date.now();
 }
 
-/** 一批消息按并发度处理（同一条 Stream 内不保证顺序，但同一 reqId 幂等） */
-async function runBatch(redis: Redis, messages: Array<[string, string[]]>): Promise<void> {
-  for (let i = 0; i < messages.length; i += CONCURRENCY) {
-    const slice = messages.slice(i, i + CONCURRENCY);
-    await Promise.all(slice.map(([id, fields]) => processMessage(redis, id, [id, fields])));
-  }
-}
+let activeConsumer: Awaited<ReturnType<typeof createKafkaConsumer>> | null = null;
 
-/** 主消费循环：XREADGROUP 阻塞读（用 while 而不是 setInterval，避免循环重叠） */
-async function readLoop(redis: Redis, isRunning: () => boolean): Promise<void> {
-  while (isRunning()) {
-    try {
-      const response = (await redis.call(
-        'XREADGROUP', 'GROUP', GROUP_NAME, CONSUMER_NAME,
-        'COUNT', BATCH_SIZE, 'BLOCK', BLOCK_MS,
-        'STREAMS', redisKey(SECKILL_STREAM), '>'
-      )) as Array<[string, Array<[string, string[]]>]> | null;
-
-      if (!response) { await sleep(EMPTY_STREAM_POLL_MS); continue; }
-      for (const [, messages] of response) await runBatch(redis, messages);
-    } catch (error: any) {
-      stats.lastError = String(error?.message ?? error);
-      console.log(JSON.stringify({ event: 'seckill.consumer.error', message: stats.lastError }));
-      await sleep(1000); // 连接抖动时别空转打满 CPU
-    }
-  }
-}
-
-/**
- * PEL 回收循环：把"投递出去但迟迟没 ACK"的消息认领回来重新处理。
- * 这是 Redis Stream 唯一的"至少一次"保障 —— 没有它，进程崩溃就等于丢单。
- */
-async function reclaimLoop(redis: Redis, isRunning: () => boolean): Promise<void> {
-  while (isRunning()) {
-    try {
-      let cursor = '0-0';
-      do {
-        const reply = (await redis.call(
-          'XAUTOCLAIM', redisKey(SECKILL_STREAM), GROUP_NAME, CONSUMER_NAME,
-          CLAIM_IDLE_MS, cursor, 'COUNT', BATCH_SIZE
-        )) as [string, Array<[string, string[]]>, string[]] | null;
-
-        if (!reply) break;
-        const [nextCursor, claimed] = reply;
-        cursor = nextCursor ?? '0-0';
-        if (claimed?.length) {
-          stats.reclaimed += claimed.length;
-          console.log(JSON.stringify({ event: 'seckill.msg.reclaimed', count: claimed.length }));
-          await runBatch(redis, claimed);
-        }
-      } while (cursor !== '0-0' && isRunning());
-    } catch (error: any) {
-      stats.lastError = String(error?.message ?? error);
-      console.log(JSON.stringify({ event: 'seckill.reclaim.error', message: stats.lastError }));
-    }
-    await sleep(RECLAIM_INTERVAL_MS);
-  }
-}
-
-/** 消费者主入口：返回 stop()，server 关闭时调用 */
 export function startSeckillConsumer(): () => void {
-  const redis = createConsumerRedis();
   let running = true;
-  const isRunning = () => running;
-
-  redis.on('error', (error: Error) => {
-    stats.lastError = error.message;
-    console.log(JSON.stringify({ event: 'seckill.consumer.redis_error', message: error.message }));
-  });
-
   void (async () => {
-    // Redis 可能比 Node 晚起来：先等一等，再建组，否则组会一直建不上
-    const ready = await waitForRedis(15000);
-    if (!ready) console.log(JSON.stringify({ event: 'seckill.consumer.redis_not_ready' }));
-
-    // 每 5 秒重试一次建组，直到成功（Redis 挂了也能自愈）
     while (running) {
-      try { await ensureGroup(redis); break; } catch { await sleep(5000); }
+      let consumer: Awaited<ReturnType<typeof createKafkaConsumer>> | null = null;
+      try {
+        consumer = await createKafkaConsumer(SECKILL_GROUP);
+        if (!running) {
+          await consumer.disconnect();
+          return;
+        }
+        activeConsumer = consumer;
+        await consumer.subscribe({ topics: [SECKILL_TOPIC, SECKILL_RETRY_TOPIC], fromBeginning: true });
+        await consumer.run({
+          autoCommit: false,
+          eachMessage: async ({ topic, partition, message }) => {
+            try {
+              await handleKafkaMessage(topic, message.value, message.headers?.attempt);
+              await consumer?.commitOffsets([{
+                topic,
+                partition,
+                offset: (BigInt(message.offset) + 1n).toString()
+              }]);
+            } catch (error: unknown) {
+              stats.lastError = error instanceof Error ? error.message : String(error);
+              console.error(JSON.stringify({ event: 'seckill.consumer.message_failed', topic, message: stats.lastError }));
+              if (error instanceof PoisonMessageError) {
+                await publishKafka(SECKILL_DLT_TOPIC, [{
+                  key: message.key?.toString() ?? `invalid-${topic}-${partition}-${message.offset}`,
+                  value: JSON.stringify({
+                    raw: message.value?.toString() ?? null,
+                    error: error.message,
+                    failedAt: new Date().toISOString()
+                  })
+                }]);
+                stats.failed += 1;
+                stats.dlq += 1;
+                await consumer?.commitOffsets([{
+                  topic,
+                  partition,
+                  offset: (BigInt(message.offset) + 1n).toString()
+                }]);
+                return;
+              }
+              await sleep(1000);
+              throw error;
+            }
+          }
+        });
+        break;
+      } catch (error: unknown) {
+        if (consumer) {
+          activeConsumer = null;
+          await consumer.disconnect().catch(() => undefined);
+        }
+        if (!running) break;
+        stats.lastError = error instanceof Error ? error.message : String(error);
+        console.error(JSON.stringify({ event: 'seckill.consumer.start_failed', message: stats.lastError }));
+        await sleep(5000);
+      }
     }
-    if (!running) { redis.disconnect(); return; }
-
-    await Promise.all([readLoop(redis, isRunning), reclaimLoop(redis, isRunning)]);
-  })().catch((error: any) => {
-    stats.lastError = String(error?.message ?? error);
-    console.log(JSON.stringify({ event: 'seckill.consumer.fatal', message: stats.lastError }));
+  })().catch((error: unknown) => {
+    stats.lastError = error instanceof Error ? error.message : String(error);
+    console.error(JSON.stringify({ event: 'seckill.consumer.start_failed', message: stats.lastError }));
   });
 
   return () => {
     running = false;
-    try { redis.disconnect(); } catch { /* 忽略 */ }
+    const consumer = activeConsumer;
+    activeConsumer = null;
+    if (consumer) {
+      void consumer.stop().then(() => consumer.disconnect()).catch((error: unknown) => {
+        console.error(JSON.stringify({
+          event: 'seckill.consumer.stop_failed',
+          message: error instanceof Error ? error.message : String(error)
+        }));
+      });
+    }
   };
 }
 
-/** 队列可观测性：积压多少、多少条在 PEL、死信多少 —— 答辩时要能当场查 */
 export async function getQueueStats(): Promise<{
-  redis: 'ok' | 'unavailable';
-  streamLength: number | null;
-  pending: number | null;
-  dlqLength: number | null;
-  streamMaxLength: number;
+  kafka: 'ok' | 'unavailable';
+  lag: number | null;
+  dltLength: number | null;
   consumer: string;
   group: string;
   counters: ReturnType<typeof getConsumerStats>;
 }> {
   const counters = getConsumerStats();
-  const redis = getRedis();
-  if (!redis || !isRedisReady()) {
-    return { redis: 'unavailable', streamLength: null, pending: null, dlqLength: null, streamMaxLength: 0, consumer: CONSUMER_NAME, group: GROUP_NAME, counters };
-  }
+  const admin = createKafkaAdmin();
   try {
-    const [streamLength, dlqLength, pendingReply] = await Promise.all([
-      redis.xlen(redisKey(SECKILL_STREAM)),
-      redis.xlen(redisKey(SECKILL_DLQ)),
-      (redis.call('XPENDING', redisKey(SECKILL_STREAM), GROUP_NAME) as Promise<unknown[]>).catch(() => null)
+    await admin.connect();
+    const [mainOffsets, retryOffsets, dltOffsets] = await Promise.all([
+      admin.fetchTopicOffsets(SECKILL_TOPIC),
+      admin.fetchTopicOffsets(SECKILL_RETRY_TOPIC),
+      admin.fetchTopicOffsets(SECKILL_DLT_TOPIC)
     ]);
-    const pending = Array.isArray(pendingReply) ? Number(pendingReply[0]) : null;
+    const [mainCommitted, retryCommitted] = await Promise.all([
+      admin.fetchOffsets({ groupId: SECKILL_GROUP, topics: [SECKILL_TOPIC] }),
+      admin.fetchOffsets({ groupId: SECKILL_GROUP, topics: [SECKILL_RETRY_TOPIC] })
+    ]);
+    const committedFor = (topic: string, values: typeof mainCommitted) =>
+      values.find((entry) => entry.topic === topic)?.partitions
+        .reduce((sum, item) => sum + Math.max(0, Number(item.offset)), 0) ?? 0;
+    const lag = [...mainOffsets, ...retryOffsets].reduce((sum, item) => sum + Number(item.offset), 0)
+      - committedFor(SECKILL_TOPIC, mainCommitted)
+      - committedFor(SECKILL_RETRY_TOPIC, retryCommitted);
+    const dltLength = dltOffsets.reduce((sum, item) => sum + Number(item.offset), 0);
+    return { kafka: 'ok', lag: Math.max(0, lag), dltLength, consumer: CONSUMER_NAME, group: SECKILL_GROUP, counters };
+  } catch (error: unknown) {
     return {
-      redis: 'ok',
-      streamLength,
-      pending,
-      dlqLength,
-      streamMaxLength: Number(process.env.SECKILL_STREAM_MAXLEN ?? 10000),
+      kafka: 'unavailable',
+      lag: null,
+      dltLength: null,
       consumer: CONSUMER_NAME,
-      group: GROUP_NAME,
-      counters
+      group: SECKILL_GROUP,
+      counters: { ...counters, lastError: error instanceof Error ? error.message : String(error) }
     };
-  } catch {
-    return { redis: 'unavailable', streamLength: null, pending: null, dlqLength: null, streamMaxLength: 0, consumer: CONSUMER_NAME, group: GROUP_NAME, counters };
+  } finally {
+    await admin.disconnect().catch(() => undefined);
   }
 }

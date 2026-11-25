@@ -1,0 +1,168 @@
+openapi: 3.0.3
+info:
+  title: Travel Agent Node APIs - S1 additions
+  version: 1.0.0
+servers:
+  - url: /v1
+paths:
+  /events:
+    post:
+      summary: Submit recommendation behavior events
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/Event'
+                - type: array
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    $ref: '#/components/schemas/Event'
+      responses:
+        '202':
+          description: Accepted for asynchronous Kafka delivery
+        '400':
+          description: Invalid event payload
+        '403':
+          description: Event user does not match the authenticated user
+  /admin/audit/logs:
+    get:
+      summary: Query login, operation, or system logs
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: type
+          required: true
+          schema:
+            type: string
+            enum: [login, operation, system]
+        - in: query
+          name: level
+          schema:
+            type: string
+            enum: [trace, debug, info, warn, error, fatal]
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - in: query
+          name: size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Paginated logs
+  /seckill/{routeId}:
+    post:
+      summary: Queue a seckill order
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: routeId
+          required: true
+          schema:
+            type: integer
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Request queued in Kafka
+        '503':
+          description: Redis or Kafka unavailable; no stock is consumed
+  /internal/timers/{task}:
+    post:
+      servers:
+        - url: /
+      summary: Run an internal timer task
+      security:
+        - internalHmac: []
+      parameters:
+        - in: path
+          name: task
+          required: true
+          schema:
+            type: string
+            enum: [expire-orders, refresh-stock, seckill-toggle, dashboard-preagg]
+        - in: header
+          name: X-Timestamp
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Nonce
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Internal-Key
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task completed
+        '401':
+          description: Invalid or replayed request signature
+        '404':
+          description: Public source address is not allowed
+        '409':
+          description: Task is already running
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    internalHmac:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+  schemas:
+    Event:
+      type: object
+      additionalProperties: false
+      required: [userId, itemType, itemId, eventType, ts, sessionId]
+      properties:
+        userId:
+          oneOf:
+            - type: string
+            - type: integer
+        itemType:
+          type: string
+          maxLength: 40
+        itemId:
+          oneOf:
+            - type: string
+            - type: integer
+        eventType:
+          type: string
+          enum: [impression, click, dwell, like, favorite, share, order]
+        ts:
+          type: string
+          format: date-time
+        sessionId:
+          type: string
+          maxLength: 128
+        extra:
+          type: object

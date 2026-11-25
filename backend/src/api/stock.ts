@@ -39,7 +39,7 @@ export async function settlePaidOrder(orderId: string): Promise<void> {
   } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
 }
 
-export async function expireUnpaidOrders(): Promise<void> {
+export async function expireUnpaidOrders(): Promise<number> {
   const conn=await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -52,20 +52,6 @@ export async function expireUnpaidOrders(): Promise<void> {
       await conn.query(`UPDATE tour_order SET status='CANCELLED',cancelled_at=UTC_TIMESTAMP(),is_stock_locked=0 WHERE id=?`,[order.id]);
     }
     await conn.commit();
+    return rows.length;
   } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
-}
-
-export function startStockExpiryJob() {
-  let running=false;
-  const tick=async()=>{
-    if(running) return;
-    running=true;
-    try { await expireUnpaidOrders(); }
-    catch { console.error(JSON.stringify({code:'STOCK_EXPIRY_FAILED'})); }
-    finally {running=false;}
-  };
-  void tick();
-  const timer=setInterval(()=>void tick(),10000);
-  timer.unref();
-  return ()=>clearInterval(timer);
 }

@@ -72,8 +72,8 @@ interface LiveSnapshot {
   hourly_messages: number[];
   /** 最新 5 条订单（跑马灯用） */
   recent_orders: Array<{ order_no: string; title: string; amount: number; status: string; created_at: string }>;
-  /** MQ 消费积压（Redis Stream：队列长度 / PEL 待 ACK / 死信） */
-  mq: { backlog: number | null; pending: number | null; dlq: number | null; redis: 'ok' | 'unavailable' };
+  /** Kafka 秒杀队列积压、死信数量与可用状态 */
+  mq: { backlog: number | null; pending: number | null; dlq: number | null; kafka: 'ok' | 'unavailable' };
 }
 
 /** 取一个字符串计数器；Redis 不可用或 key 不存在时返回 null */
@@ -213,12 +213,12 @@ async function collectSnapshot(): Promise<LiveSnapshot> {
     logEvent('stats.live.recent_orders_failed', { message: error?.message ?? String(error) });
   }
 
-  // MQ 消费积压（stream 长度 / PEL / 死信）。拿不到不算致命，标 degraded 即可
-  let mq: LiveSnapshot['mq'] = { backlog: null, pending: null, dlq: null, redis: 'unavailable' };
+  // MQ 消费积压与死信。拿不到不算致命，标 degraded 即可
+  let mq: LiveSnapshot['mq'] = { backlog: null, pending: null, dlq: null, kafka: 'unavailable' };
   try {
     const queue = await getQueueStats();
-    mq = { backlog: queue.streamLength, pending: queue.pending, dlq: queue.dlqLength, redis: queue.redis };
-    if (queue.redis !== 'ok') degraded.push('mq');
+    mq = { backlog: queue.lag, pending: null, dlq: queue.dltLength, kafka: queue.kafka };
+    if (queue.kafka !== 'ok') degraded.push('mq');
   } catch (error: any) {
     degraded.push('mq');
     logEvent('stats.live.mq_failed', { message: error?.message ?? String(error) });

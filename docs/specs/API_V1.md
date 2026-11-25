@@ -35,6 +35,15 @@ PUT `/users/{id}` 完整资料字段为 nickname、avatar_url（可 null）、de
 
 组员2补充接口：`GET /health` 无需登录并返回标准包络中的 `data.status = "ok"`；聊天接口为 `GET /chat/sessions`、`GET /chat/sessions/{id}/messages`、`POST /chat/sessions`（创建会话并写入首条用户消息）。游客获得 6 个按钮权限：会话查询、消息查询/发送、创建行程、创建/查询预订。管理端补齐 `PATCH /admin/routes/{id}`、`GET /admin/orders`，订单与统计按当前旅行社隔离；订单联系手机号脱敏。线路新增/修改与请求追踪号写入 `sys_audit_log`。写请求继续使用幂等键及 HMAC 签名约定。
 
+## 第 12 次课 Node 接口
+
+- `POST /events`：匿名可用；单条或最多 50 条事件；若带 Bearer 登录态，`userId` 必须与当前登录用户一致；接受后异步送入 Kafka `rec.events`（key=`userId`），返回 202。
+- `GET /admin/audit/logs`：需 `system:permission:query`；`type=login|operation|system`，可按 `level`、`from`、`to`、`page`、`size` 查询。系统日志读取 Node pino JSON 文件尾部。
+- `POST /internal/timers/{expire-orders,refresh-stock,seckill-toggle,dashboard-preagg}`：私网 + HMAC-SHA256；使用独立 `INTERNAL_API_SECRET`，头为 `X-Timestamp`（epoch 毫秒）、`X-Nonce`、`X-Internal-Key`（HMAC 摘要）。±5 分钟时间窗，Redis nonce 去重 5 分钟。详见 `docs/plan/内部接口契约.md`。
+- 秒杀仍使用原 `/seckill/{routeId}` 和 `/seckill/result/{reqId}` HTTP 语义，内部队列迁至 Kafka：`seckill` → `seckill.retry`（最多 3 次，退避 1/5/30 秒）→ `seckill.dlt`。IM `im:notify` 仍使用 Redis Stream。
+
+Node 登录日志、业务操作日志分别写入 `sys_login_log`、`sys_operation_log`；权限变更同时扩展写入 `sys_audit_log`。不写入密码、token、手机号原文、Authorization、签名头或请求体。新迁移：`database/14_logs.sql`、`database/15_seckill_window.sql`。
+
 ## 即时通讯接口（阶段 1 骨架）
 
 所有接口都需 Bearer token。`11_im.sql` 创建 `im_conversation`、`im_participant`、`im_message`、`im_device`、`im_read_cursor`；`12_im_perm.sql` 为 TOURIST 授予前三个即时通讯权限，为 AGENCY_ADMIN / AGENT 授予全部四个 IM 权限及实时统计权限。

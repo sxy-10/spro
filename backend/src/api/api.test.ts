@@ -14,10 +14,13 @@ test('v1 HTTP contract, ownership, signing, idempotency and order state', async 
   process.env.RATE_LIMIT_DISABLED='1';
   const originalQuery=pool.query, originalConnection=pool.getConnection;
   const cache=new Map<string,any>(), nonces=new Set<string>();
+  const operationLogs: unknown[][]=[];
   let orders=0, status='PENDING';
   let locked=0,sold=0,total=9,expired=false;
   let failInsert=false;
   const query=async(sql:string,args:any[]=[])=>{
+    if(sql.includes('INSERT INTO sys_operation_log')) { operationLogs.push(args); return [{}]; }
+    if(sql.includes('INSERT INTO sys_audit_log')) return [{}];
     if(sql.includes('api_rate_limit')) return [sql.startsWith('SELECT')?[{hits:1}]:{}];
     if(sql.includes('AS role_code')||sql.includes('AS permission_code')) return [[]];
     if(sql.includes('FROM sys_user_role ur') && sql.includes('p.code')) {
@@ -83,6 +86,16 @@ test('v1 HTTP contract, ownership, signing, idempotency and order state', async 
     const health = await call('/health', 'GET', undefined, { auth: false });
     assert.equal(health.status, 200);
     assert.equal(health.body.data.status, 'ok');
+    const unsafeEvent = await call('/events', 'POST', {
+      userId: '1',
+      itemType: 'PRODUCT',
+      itemId: '7',
+      eventType: 'click',
+      ts: new Date().toISOString(),
+      sessionId: 'test-session',
+      extra: { authorization: 'Bearer sensitive-token' }
+    }, { auth: false });
+    assert.equal(unsafeEvent.status, 400);
     assert.equal((await call('/plans','GET',undefined,{auth:false})).status,401);
     assert.equal((await call('/users/2')).status,403);
     assert.equal((await call('/admin/routes')).status,403);
@@ -130,6 +143,9 @@ test('v1 HTTP contract, ownership, signing, idempotency and order state', async 
     await settlePaidOrder('1');assert.equal(sold,3);
     assert.equal((await call('/plans/00000000000000000000000000','DELETE')).status,204);
     assert.equal((await call('/plans/00000000000000000000000000','DELETE')).status,204);
+    await new Promise(resolve=>setTimeout(resolve,10));
+    assert.ok(operationLogs.length > 0);
+    assert.ok(!JSON.stringify(operationLogs).includes('13800001234'));
     assert.deepEqual(serialize({createdAt:new Date('2026-10-01T00:00:00Z'),basePriceRmb:19.99,isActive:1}),{created_at:'2026-10-01T00:00:00.000Z',base_price_rmb:'19.99',is_active:true});
     (pool as any).query=async()=>{throw new Error('SECRET SQL /internal/path');};
     const failure=await call('/routes');

@@ -21,7 +21,8 @@
  * 依赖的 Redis key：
  *   stock:{routeId}:{date}        剩余名额（Lua 原子预扣）
  *   lock:seckill:{uid}:{rid}:{date} 单用户 10 秒互斥锁
- *   seckill:result:{reqId}        排队结果（消费者写入，TTL 30 分钟）
+ * Kafka topic `seckill` 承载下单消息；`seckill.retry` / `seckill.dlt` 负责失败隔离。
+ * Redis 结果 key `seckill:result:{reqId}` 由消费者写入（TTL 30 分钟）。
  */
 import { Router } from 'express';
 import { createHash, randomUUID } from 'node:crypto';
@@ -32,6 +33,7 @@ import { cacheDel, getRedis, incrBy, isRedisReady, preDeductStock, readStock, re
 import { warmUpStock } from './stockCache.js';
 import { requirePermission } from '../auth/rbac.js';
 import { publishSeckill } from '../mq/producer.js';
+import { getKafkaProducer } from '../mq/kafka.js';
 import { authenticateJwt } from '../auth/passport.js';
 import type { AuthenticatedUserPayload } from '../auth/passport.js';
 import { reply, run, ApiError } from './core.js';
@@ -76,9 +78,15 @@ seckillRouter.post('/seckill/:routeId', authenticateJwt, requirePermission('orde
   const redis = getRedis();
   if (!redis || !isRedisReady()) throw new ApiError(503, 50001, '秒杀服务暂时不可用，请稍后重试');
 
+  try {
+    await getKafkaProducer();
+  } catch {
+    throw new ApiError(503, 50001, '秒杀服务暂时不可用，请稍后重试');
+  }
+
   // ① 场次存在性 + 活动时间窗口（字段早就建好了，之前一直没用）
   const [stockRows] = await pool.query<RowDataPacket[]>(
-    `SELECT seckill_total_seats, seckill_start_at, seckill_end_at
+    `SELECT seckill_total_seats, seckill_start_at, seckill_end_at, seckill_enabled
        FROM route_stock WHERE route_id = ? AND travel_date = ?`,
     [routeId, date]
   );
@@ -86,6 +94,9 @@ seckillRouter.post('/seckill/:routeId', authenticateJwt, requirePermission('orde
   if (Number(stockRows[0].seckill_total_seats) <= 0) {
     reply(res, { status: 'sold_out', remaining: 0 });
     return;
+  }
+  if (!Number(stockRows[0].seckill_enabled)) {
+    throw new ApiError(409, 20011, '秒杀活动当前未开放');
   }
   const now = Date.now();
   const startsAt = stockRows[0].seckill_start_at ? new Date(stockRows[0].seckill_start_at).getTime() : null;
@@ -134,10 +145,24 @@ seckillRouter.post('/seckill/:routeId', authenticateJwt, requirePermission('orde
   // ⑥ 预扣成功 → 发 MQ；发失败必须回补库存，否则这份名额永远卖不掉（库存泄漏）
   try {
     await publishSeckill({ reqId, userId, routeId, date, people });
-  } catch {
-    await incrBy(stockKey, people); // 回补：不加回去这份名额就永远卖不掉了
+  } catch (error) {
+    const refunded = await incrBy(stockKey, people);
+    if (refunded === null) {
+      console.error(JSON.stringify({
+        event: 'seckill.stock.refund_failed',
+        reqId,
+        routeId,
+        date,
+        people
+      }));
+    }
     await cacheDel(lockKey);
-    throw new ApiError(500, 50000, '下单失败，请重试');
+    console.error(JSON.stringify({
+      event: 'seckill.kafka.publish_failed',
+      reqId,
+      message: error instanceof Error ? error.message : String(error)
+    }));
+    throw new ApiError(503, 50001, '秒杀服务暂时不可用，请稍后重试');
   }
 
   // ⑦ 先写一条 pending，避免前端轮询在消费者还没处理时读到"记录不存在"。

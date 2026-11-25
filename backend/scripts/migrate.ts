@@ -87,6 +87,66 @@ const ensureOrderStockColumns = async (admin: mysql.Connection) => {
   }
 };
 
+const ensureColumns = async (
+  admin: mysql.Connection,
+  table: string,
+  columns: Array<{ name: string; definition: string }>
+) => {
+  const [existing] = await admin.query<mysql.RowDataPacket[]>(
+    `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+    [DB_NAME, table]
+  );
+  const names = new Set(existing.map((column) => String(column.name)));
+  for (const column of columns) {
+    if (!names.has(column.name)) {
+      await admin.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column.name}\` ${column.definition}`);
+    }
+  }
+};
+
+const run14 = async (admin: mysql.Connection) => {
+  const file = '14_logs.sql';
+  const sql = sanitize(fs.readFileSync(path.join(SCRIPT_DIR, file), 'utf8'));
+  const createStatements = sql.replace(/^--.*$/gm, '').split(/ALTER TABLE sys_audit_log/i)[0]
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+  for (const statement of createStatements) await admin.query(statement);
+  await ensureColumns(admin, 'sys_audit_log', [
+    { name: 'client_ip', definition: 'VARCHAR(45) NULL' },
+    { name: 'ua', definition: 'VARCHAR(500) NULL' },
+    { name: 'result', definition: 'VARCHAR(16) NULL' }
+  ]);
+  console.log(`[migrate] ${file} ✔`);
+};
+
+const run15 = async (admin: mysql.Connection) => {
+  const file = '15_seckill_window.sql';
+  const sql = sanitize(fs.readFileSync(path.join(SCRIPT_DIR, file), 'utf8'));
+  const statements = sql.replace(/^--.*$/gm, '').split(/ALTER TABLE route_stock/i)[0]
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+  for (const statement of statements) await admin.query(statement);
+  await ensureColumns(admin, 'route_stock', [
+    { name: 'seckill_start_at', definition: 'DATETIME(3) NULL' },
+    { name: 'seckill_end_at', definition: 'DATETIME(3) NULL' },
+    { name: 'seckill_enabled', definition: 'TINYINT(1) NOT NULL DEFAULT 1' }
+  ]);
+  const [indexes] = await admin.query<mysql.RowDataPacket[]>(
+    `SELECT INDEX_NAME AS name FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'route_stock' AND INDEX_NAME = 'idx_seckill_window'`,
+    [DB_NAME]
+  );
+  if (!indexes.length) {
+    await admin.query(
+      'ALTER TABLE route_stock ADD INDEX idx_seckill_window (seckill_enabled, seckill_start_at, seckill_end_at)'
+    );
+  }
+  console.log(`[migrate] ${file} ✔`);
+};
+
 const tableExists = async (admin: mysql.Connection, table: string): Promise<boolean> => {
   const [rows] = await admin.query<mysql.RowDataPacket[]>(
     'SELECT 1 FROM information_schema.tables WHERE table_schema=? AND table_name=? LIMIT 1',
@@ -138,6 +198,8 @@ const run = async () => {
     }
     await run09(admin);
     await ensureOrderStockColumns(admin);
+    await run14(admin);
+    await run15(admin);
     const [rows] = await admin.query<mysql.RowDataPacket[]>('SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = ?', [DB_NAME]);
     console.log(`[migrate] 完成：${DB_NAME} 共 ${rows[0].n} 张表`);
   } finally {

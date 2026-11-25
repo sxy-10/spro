@@ -59,18 +59,24 @@ rbac.use((req, res, next) => {
         }
       }
       if (res.statusCode < 400) {
+        const clientIp = (req.socket.remoteAddress ?? '').slice(0, 45);
+        const userAgent = (req.get('user-agent') ?? '').slice(0, 500);
+        const safePath = req.path.slice(0, 200);
         void pool.query(
           `INSERT INTO sys_audit_log
-             (actor_id, action, resource_type, resource_id, request_method, request_path, detail, trace_id)
-           VALUES (?, ?, 'RBAC', ?, ?, ?, ?, ?)`,
+             (actor_id, action, resource_type, resource_id, request_method, request_path,
+              detail, trace_id, client_ip, ua, result)
+           VALUES (?, ?, 'RBAC', ?, ?, ?, ?, ?, ?, ?, 'SUCCESS')`,
           [
             res.locals.user?.id ?? null,
             req.method,
             req.params?.id ? String(req.params.id) : null,
             req.method,
-            req.originalUrl,
-            JSON.stringify({ body: req.body }),
-            res.locals.traceId ?? null
+            safePath,
+            `${req.method} ${safePath}`.slice(0, 500),
+            res.locals.traceId ?? null,
+            clientIp,
+            userAgent
           ]
         ).catch((error) => console.warn(JSON.stringify({
           level: 'warn',

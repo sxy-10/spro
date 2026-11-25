@@ -2,10 +2,10 @@ import { createServer } from 'node:http';
 import { app } from './app.js';
 import { secret } from './api/core.js';
 import { cleanupExpiredRateLimits } from './api/core.js';
-import { startStockExpiryJob } from './api/stock.js';
 import { reconcileSeckillStock, warmUpAllSeckillStock } from './api/stockCache.js';
 import { startSeckillConsumer, getQueueStats } from './mq/consumer.js';
 import { startImNotifyConsumer, stopImNotifyConsumer } from './mq/imNotifyConsumer.js';
+import { disconnectKafkaProducer } from './mq/kafka.js';
 import { waitForRedis } from './db/redis.js';
 import { attachWs } from './im/wsServer.js';
 import { startPresenceJanitor } from './im/presence.js';
@@ -34,7 +34,6 @@ server.listen(Number(process.env.PORT) || 3001, () => {
 server.requestTimeout = 30000;
 server.headersTimeout = 15000;
 
-const stopStockExpiry = startStockExpiryJob();
 const stopSeckillConsumer = startSeckillConsumer();
 // IM 离线通知消费者（组员3 · 第 3 棒）：读 im:notify，离线参与者 INCR im:offline:{uid}
 startImNotifyConsumer();
@@ -80,8 +79,7 @@ rateLimitCleanupTimer.unref();
 const reconcileTimer = setInterval(async () => {
   try {
     const stats = await getQueueStats();
-    if (stats.redis !== 'ok') return;
-    if ((stats.pending ?? 0) > 0 || (stats.streamLength ?? 0) > 0) return;
+    if (stats.kafka !== 'ok' || (stats.lag ?? 0) > 0) return;
     const result = await reconcileSeckillStock();
     if (result.refreshed > 0) console.log(JSON.stringify({ event: 'seckill.reconcile.done', ...result }));
   } catch (error: any) {
@@ -98,10 +96,15 @@ void warmCache().catch((error: unknown) => {
 });
 
 server.on('close', () => {
-  stopStockExpiry();
   stopSeckillConsumer();
   stopImNotifyConsumer();
   stopPresenceJanitor();
+  void disconnectKafkaProducer().catch((error: unknown) => {
+    console.error(JSON.stringify({
+      event: 'kafka.producer.disconnect_failed',
+      message: error instanceof Error ? error.message : String(error)
+    }));
+  });
   clearInterval(rateLimitCleanupTimer);
   clearInterval(reconcileTimer);
   // 给所有 WS 连接发 4005 再关，客户端据此不再重试（换进程重启才有意义）
