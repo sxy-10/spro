@@ -83,6 +83,8 @@ export const api = {
     request<T>('POST', path, body, headers),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
+  /** Node 的删除接口也走幂等写，BFF 会补签名与 Idempotency-Key，前端照常带 XSRF 即可。 */
+  del: <T>(path: string) => request<T>('DELETE', path),
 }
 
 /** 拼查询串：空值直接丢弃，避免 Node 的 strict 校验报"未知参数"。 */

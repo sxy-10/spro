@@ -12,6 +12,9 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8080',
         changeOrigin: false,
+        // 客服台的 IM 长连接走 /api/im/ws：不开 ws 的话升级请求不会转发，
+        // 浏览器表现为连接挂起/被 reset（不是 401，容易误判成鉴权问题）。
+        ws: true,
       },
     },
   },

@@ -2,6 +2,11 @@
 
 **一个 jar 交付**：浏览器打开 `:8080` 就是后台，`/api/**` 与页面同源；Node 仍是唯一写库方。
 当前进度：**S2（组员 1）已完成** —— 真实登录、NodeApiClient、B 端 6 页、页面级聚合、埋点透传。
+**已追加**：实时大屏（`/agency/bigscreen`）与在线客服（`/agency/livedesk`）已从旧 `frontend/agency-web` 迁入，
+由 BFF 中转 SSE（`/api/stats/live`）与 WS 桥接（`/api/im/ws`），浏览器仍只持 Cookie。
+**已追加（平台端）**：旅行社管理（`/platform/agencies`）与账号管理（`/platform/users`）两页，
+BFF 透传 `/api/platform/**`（机构 CRUD/启停用、账号增改/启停/分配角色/角色下拉），权限码仍由 Node 判定；
+super 登录自动落到平台端，机构启停用会同步机构名下管理员账号状态（Node 规则）。
 
 ## 结构
 
@@ -9,19 +14,24 @@
 java-web/
 ├─ pom.xml                    # frontend-maven-plugin 在 generate-resources 阶段构建 SPA
 ├─ agency-web/                # SPA（React 18 + Vite 6 + Ant Design 5 + TS）
-│  ├─ src/App.tsx             # 路由：/login + /agency/{dashboard,routes,orders,stock,customers}
+│  ├─ src/App.tsx             # 路由：/login + /agency/{dashboard,routes,orders,stock,customers,livedesk,bigscreen} + /platform/{agencies,users}
 │  ├─ src/lib/http.ts         # 同源请求层：Cookie + X-XSRF-TOKEN；qs() 拼查询串
 │  ├─ src/lib/auth.tsx        # /api/me 会话上下文 + can(code) 权限判定
+│  ├─ src/lib/statsSse.ts     # 大屏取数：fetch 流式解析 SSE（/api/stats/live），台阶退避重连
+│  ├─ src/lib/imWs.ts         # 客服 WS 客户端：/api/im/ws（BFF 桥接，不发 auth 帧）+ 长轮询降级
+│  ├─ src/lib/imStore.ts      # 本地消息仓库：seq 排序 + clientMsgId/seq 双去重 + 三态
+│  ├─ src/styles/ops.css      # 客服台与大屏的专属样式（类名与 AntD 无交集）
 │  ├─ src/lib/types.ts        # Node 返回的 snake_case 结构（只声明用到的）
 │  ├─ src/components/         # AppLayout / Permission / RequireAuth / TrendChart
-│  └─ src/pages/              # login、agency（6 页）、error（403/404）
+│  └─ src/pages/              # login、agency（8 页：6 业务 + livedesk + bigscreen）、platform（2 页）、error（403/404）
 └─ src/main/
    ├─ java/com/example/adminweb/
    │  ├─ config/              SecurityConfig（会话+CSRF）、SpaForwardController、WebMvcConfig、NodeApiConfig
    │  ├─ security/            AdminUser、NodeSession、SessionKeys
-   │  ├─ api/                 RequestSigner（HMAC）、NodeApiClient（签名/包络/重试）、NodeApiException
+   │  ├─ api/                 RequestSigner（HMAC）、NodeApiClient（签名/包络/重试）、NodeStreamClient（SSE/WS）、NodeApiException
+   │  ├─ im/                  ImWsBridgeHandler（/api/im/ws ↔ Node 双向桥）、ImWsHandshakeInterceptor
    │  ├─ agency/              B 端聚合接口（dashboard/routes/orders/stock/customers）
-   │  └─ web/                 Auth / Me / Events / Ping、Sessions、ApiResult、异常与 401·403 出口
+   │  └─ web/                 Auth / Me / Events / ImController / LiveStatsController、Sessions、ApiResult、异常与 401·403 出口
    └─ resources/application.yml
 ```
 
@@ -71,6 +81,9 @@ POST /api/auth/logout    → 先吊销 Node api_session，再销毁本地会话
 | 库存 | `GET/PUT /api/agency/stock/{routeId}` | 不提供"触发预热"，那是 S4 的内部接口 |
 | 客户 | `GET /api/agency/customers`、`GET /api/agency/customers/{id}`、`PUT /api/agency/customers/{id}/note` | 手机号已脱敏 |
 | 埋点 | `POST /api/events` | 透传 Node `/v1/events`，允许匿名 |
+| 平台·旅行社 | `GET/POST /api/platform/agencies`、`GET/PUT/PATCH /api/platform/agencies/{id}` | PATCH 启停用同步机构名下管理员状态；列表手机号脱敏 |
+| 平台·账号 | `GET /api/platform/users`、`GET /api/platform/roles`、`POST /api/platform/users`、`PUT/PATCH /api/platform/users/{id}` | 新建走 RBAC `/v1/admin/users`（手机号即账号）；PATCH 禁用即撤销全部会话；super 不可禁用 |
+| 平台·越权 | 旅行社管理员访问 `/api/platform/**` | 一律 403（Node `requireAction` 判定，BFF 无平行权限） |
 
 ## 自检结果（2026-11-25）
 

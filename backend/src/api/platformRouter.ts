@@ -11,24 +11,24 @@ import { chat, llmInfo } from '../agent/llm.js';
  * 依据：demo/Web端原型设计说明.md §4 + 三端实施方案
  *
  * 契约：
- *   GET  /platform/overview                  平台工作台大盘          analytics 只读（order:manage:query）
+ *   GET  /platform/overview                  平台工作台大盘          analytics 只读（analytics:platform:query，super 专属）
  *   GET  /platform/agencies                  机构列表               system:agency:query
  *   POST /platform/agencies                  新增机构               system:agency:add
  *   PUT  /platform/agencies/:id              编辑机构               system:agency:update
  *   PATCH /platform/agencies/:id             启用/禁用机构           system:agency:update
- *   GET  /platform/audits                    审核列表（线路/特产）    order:manage:query（只读）
+ *   GET  /platform/audits                    审核列表（线路/特产）    analytics:platform:query（只读）
  *   POST /platform/audits/:type/:id          审核结论（幂等写）      route:line:audit / souvenir:audit
  *   GET  /platform/users                     全量用户列表            system:user:query
  *   PATCH /platform/users/:id                启用/禁用账号           system:user:update
  *   POST /platform/users/:id/roles           分配角色（全量覆盖）     system:user:update
- *   GET  /platform/orders                    全量订单               order:manage:query
+ *   GET  /platform/orders                    全量订单               analytics:platform:query
  *   GET  /platform/finance/summary           财务 KPI               finance:platform:query
  *   GET  /platform/settlements               结算单列表             finance:platform:query
  *   POST /platform/settlements/:id/confirm   确认结算（幂等写）      finance:platform:settle
  *   GET  /platform/refunds                   退款记录               finance:platform:query
  *   GET  /platform/ai-service                AI 服务监控            ai:service:query
  *   PUT  /platform/ai-service/config         服务配置               ai:service:config
- *   GET  /platform/analytics                 数据分析中心            order:manage:query
+ *   GET  /platform/analytics                 数据分析中心            analytics:platform:query
  */
 
 export const platform = Router();
@@ -49,7 +49,7 @@ const userOf = (req: Request) =>
 // 平台工作台大盘
 // ---------------------------------------------------------------------------
 
-platform.get('/platform/overview', requireAction('order:manage', 'query'), run(async (_req, res) => {
+platform.get('/platform/overview', requireAction('analytics:platform', 'query'), run(async (_req, res) => {
   const [kpiRows] = await pool.query<RowDataPacket[]>(`
     SELECT
       (SELECT COUNT(*) FROM sys_user WHERE role='TOURIST') AS tourist_count,
@@ -184,7 +184,7 @@ platform.get('/platform/agencies/:id', requireAction('system:agency', 'query'), 
 // 产品审核
 // ---------------------------------------------------------------------------
 
-platform.get('/platform/audits', requireAction('order:manage', 'query'), run(async (req, res) => {
+platform.get('/platform/audits', requireAction('analytics:platform', 'query'), run(async (req, res) => {
   const p = page(req.query, ['updated_at', 'created_at'], {
     type: z.enum(['route', 'souvenir']).default('route'),
     audit_status: z.enum(['NONE', 'PENDING', 'APPROVED', 'REJECTED']).default('PENDING'),
@@ -231,7 +231,8 @@ platform.post('/platform/audits/:type/:id', run(async (req, res) => {
     if (!decision.allowed) throw new ApiError(403, 20013, '权限不足，禁止访问');
 
     const table = isRoute ? 'travel_product' : 'souvenir';
-    const [own] = await conn.query<RowDataPacket[]>(`SELECT id, product_no, title, audit_status, agency_id FROM ${table} WHERE id=?`, [targetId]);
+    // souvenir 无 title 列（叫 name），与 GET 列表查询保持同一别名口径
+    const [own] = await conn.query<RowDataPacket[]>(`SELECT id, product_no, ${isRoute ? 'title' : 'name AS title'}, audit_status, agency_id FROM ${table} WHERE id=?`, [targetId]);
     if (!own.length) throw new ApiError(404, 20016, '待审对象不存在');
     if (own[0].audit_status === 'APPROVED' && body.result === 'APPROVED') throw new ApiError(409, 20010, '该产品已审核通过');
     // 通过 → 上架；驳回 → 维持现态并把理由回传提交方
@@ -313,7 +314,7 @@ platform.post('/platform/users/:id/roles', requireAction('system:user', 'update'
 // 订单与交易管理（全量监督，只读）
 // ---------------------------------------------------------------------------
 
-platform.get('/platform/orders', requireAction('order:manage', 'query'), run(async (req, res) => {
+platform.get('/platform/orders', requireAction('analytics:platform', 'query'), run(async (req, res) => {
   const p = page(req.query, ['created_at', 'total_amount'], {
     keyword: z.string().max(50).optional(),
     status: z.enum(['PENDING', 'PAID', 'CONFIRMED', 'CANCELLED', 'COMPLETED', 'REFUNDED']).optional(),
@@ -498,7 +499,7 @@ platform.put('/platform/ai-service/config', requireAction('ai:service', 'config'
 // 数据分析中心
 // ---------------------------------------------------------------------------
 
-platform.get('/platform/analytics', requireAction('order:manage', 'query'), run(async (req, res) => {
+platform.get('/platform/analytics', requireAction('analytics:platform', 'query'), run(async (req, res) => {
   const days = z.coerce.number().int().refine((v) => [7, 30, 90].includes(v)).default(30).parse(req.query.days);
   const [funnelRows] = await pool.query<RowDataPacket[]>(`
     SELECT

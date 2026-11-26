@@ -5,6 +5,8 @@ import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import App from './App'
 import { AuthProvider } from './lib/auth'
+// 客服台与大屏的专属样式（类名前缀 bs-/livedesk-/conv-/chat-，与 AntD 无冲突）
+import './styles/ops.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

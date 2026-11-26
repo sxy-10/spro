@@ -23,7 +23,6 @@ export default function LoginPage() {
   const { refresh } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const from = (location.state as { from?: string } | null)?.from ?? '/agency/dashboard'
 
   const loadCaptcha = useCallback(async () => {
     try {
@@ -43,8 +42,14 @@ export default function LoginPage() {
     setError(null)
     try {
       await api.post('/api/auth/login', values, { 'X-Captcha-Id': captcha.captcha_id })
-      await refresh()
-      navigate(from, { replace: true })
+      const nextMe = await refresh()
+      // 落点不能用渲染闭包里的 me（登录前是 null），要用 refresh 返回的最新会话
+      const target =
+        (location.state as { from?: string } | null)?.from ??
+        (nextMe?.buttons.some((b) => b.code === 'system:agency:query')
+          ? '/platform/overview'
+          : '/agency/dashboard')
+      navigate(target, { replace: true })
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
       // 验证码是一次性的，失败必须换一张

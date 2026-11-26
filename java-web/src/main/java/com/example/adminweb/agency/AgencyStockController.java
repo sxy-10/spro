@@ -31,6 +31,11 @@ public class AgencyStockController {
     public record StockUpdate(String travelDate, Integer totalSeats) {
     }
 
+    @GetMapping("/api/agency/stock")
+    public ApiResult<JsonNode> viewAll(HttpServletRequest request) {
+        return ApiResult.ok(node.get("/v1/admin/stock", Sessions.requireToken(request)));
+    }
+
     @GetMapping("/api/agency/stock/{routeId}")
     public ApiResult<JsonNode> view(@PathVariable String routeId, HttpServletRequest request) {
         return ApiResult.ok(node.get("/v1/admin/routes/" + routeId + "/stock", Sessions.requireToken(request)));

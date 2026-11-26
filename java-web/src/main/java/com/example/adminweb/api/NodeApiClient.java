@@ -68,6 +68,16 @@ public class NodeApiClient {
     }
 
     /**
+     * DELETE 也走 Node 的 {@code write()}（例如删除自己的快捷话术），因此同样是签名写请求。
+     *
+     * <p>body 必须是 {@code "{}"}：Node 在无 body 时 {@code req.body} 仍是 {@code {}}，
+     * 签名原文按 {@code JSON.stringify({})} 计算；这里传 {@code null} 会算成空串，必然 403。
+     */
+    public JsonNode delete(String path, String token) {
+        return call(HttpMethod.DELETE, path, Map.of(), token, Map.of(), true);
+    }
+
+    /**
      * 透传类写接口（如 {@code POST /v1/events}）：Node 不验签，但需要带上用户身份。
      *
      * <p>埋点走这里而不是 {@link #post}，是因为签名原文要求 body 的字节与 Node 反序列化后再序列化一致，
@@ -94,8 +104,9 @@ public class NodeApiClient {
     private JsonNode call(HttpMethod method, String path, Object body, String token,
                           Map<String, String> extraHeaders, boolean signed) {
         String bodyJson = body == null ? (signed ? EMPTY_BODY : null) : toJson(body);
-        // 幂等键在进入重试循环前生成一次：重试必须复用同一个键，否则 Node 会当成两笔写
-        String idempotencyKey = signed ? UUID.randomUUID().toString() : null;
+        // 幂等键在进入重试循环前生成一次：重试必须复用同一个键，否则 Node 会当成两笔写。
+        // 匿名 POST（如登录）同样落在 Node 的 write(...) 里，也要求 Idempotency-Key，因此只要带请求体就生成。
+        String idempotencyKey = (signed || bodyJson != null) ? UUID.randomUUID().toString() : null;
 
         for (int attempt = 1; attempt <= 2; attempt++) {
             RawResponse response = execute(method, path, bodyJson, token, extraHeaders, signed, idempotencyKey);
@@ -121,6 +132,9 @@ public class NodeApiClient {
             headers.put("X-Timestamp", signedHeaders.timestamp());
             headers.put("X-Nonce", signedHeaders.nonce());
             headers.put("X-Signature", signedHeaders.signature());
+        }
+        // 幂等键与签名解耦：登录等匿名 POST 也要带（Node 的 write() 对所有写请求强校验该头）
+        if (idempotencyKey != null) {
             headers.put("Idempotency-Key", idempotencyKey);
         }
 

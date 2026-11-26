@@ -3,6 +3,7 @@ package com.example.adminweb.config;
 import com.example.adminweb.web.JsonAccessDeniedHandler;
 import com.example.adminweb.web.JsonAuthEntryPoint;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -61,6 +62,9 @@ public class SecurityConfig {
                 .formLogin(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
+                        // SseEmitter 完成时会走一次 ASYNC 派发，此时 SecurityContext 已随请求线程结束；
+                        // 不放到这里会被当成"未认证"二次拦截，表现为大屏流一结束就 403。
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers(PUBLIC_PATHS).permitAll()
                         .requestMatchers("/api/ping", "/api/auth/**").permitAll()
                         // 埋点允许匿名：与 Node /v1/events 的 optionalAuthenticate 语义一致

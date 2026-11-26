@@ -640,6 +640,18 @@ agencyExt.post('/admin/plan-drafts', requireAction('itinerary:plan', 'add'), run
 // 线路库存（管理端视角：任意状态线路 + 未来 14 天批量视图）
 // ---------------------------------------------------------------------------
 
+// 本机构全部线路的未来库存（跨线路聚合，按出行日期升序）
+agencyExt.get('/admin/stock', requireAction('route:line', 'query'), run(async (req, res) => {
+  const [rows] = await pool.query<RowDataPacket[]>(`
+    SELECT rs.route_id, p.product_no, p.title AS route_title, rs.travel_date,
+      rs.total_seats, rs.locked_seats, rs.sold_seats,
+      rs.total_seats - rs.locked_seats - rs.sold_seats AS available_seats
+      FROM route_stock rs JOIN travel_product p ON p.id=rs.route_id
+      WHERE p.agency_id=? AND rs.travel_date >= CURDATE()
+      ORDER BY rs.travel_date ASC, p.product_no ASC LIMIT 500`, [agencyOf(req).agency_id]);
+  reply(res, { dates: rows, total: rows.length });
+}));
+
 agencyExt.get('/admin/routes/:id/stock', requireAction('route:line', 'query'), run(async (req, res) => {
   const routeId = id.parse(req.params.id);
   const [routes] = await pool.query<RowDataPacket[]>(
