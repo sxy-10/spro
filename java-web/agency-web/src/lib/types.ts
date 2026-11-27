@@ -420,3 +420,56 @@ export interface SystemMeta {
     sort: number
   }>
 }
+/* ==================== 平台端：日志审计（S3） ==================== */
+
+/** 登录日志行 = sys_login_log 表的一行（字段名与 14_logs.sql 一致） */
+export interface LoginLogRow {
+  id: string
+  user_id: string | null
+  login_name: string | null // 已脱敏：138****1234
+  login_ip: string | null
+  user_agent: string | null
+  result: string // SUCCESS / FAILURE
+  failure_reason: string | null // 只存 HTTP_401 这类状态码，没有原始凭据
+  trace_id: string | null
+  created_at: string
+}
+
+/** 操作日志行 = sys_operation_log 表的一行 */
+export interface OperationLogRow {
+  id: string
+  operator_id: string | null
+  action: string
+  request_method: string
+  request_path: string
+  status_code: number
+  result: string
+  client_ip: string | null
+  ua: string | null
+  trace_id: string | null
+  created_at: string
+}
+
+/** 系统日志行 = Node pino 文件的一行 JSON（不落库） */
+export interface SystemLogRow {
+  level: string // trace/debug/info/warn/error/fatal
+  time: string
+  msg: string
+  trace_id?: string
+}
+
+/** GET /v1/permissions 的返回（角色页用） */
+export interface PermissionButton {
+  permission_id: string
+  parent_id: string | null
+  name: string
+  code: string
+  sort: number
+  status: string
+}
+
+export interface PermissionsPayload {
+  list: MenuNode[] // 复用文件里已有的 MenuNode 类型
+  buttons: PermissionButton[]
+  total: number
+}

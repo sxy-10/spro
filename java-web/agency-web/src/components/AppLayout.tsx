@@ -18,6 +18,10 @@ import {
   FileDoneOutlined,
   RobotOutlined,
   SettingOutlined,
+  SafetyOutlined,        // ← 追加（S3 角色权限）
+  FileSearchOutlined,    // ← 追加（S3 操作日志）
+  LoginOutlined,         // ← 追加（S3 登录日志）
+  FileTextOutlined,      // ← 追加（S3 系统日志）
 } from '@ant-design/icons'
 import { useAuth } from '../lib/auth'
 
@@ -55,6 +59,10 @@ const PLATFORM_MENU = [
   { key: '/platform/audits', icon: <FileDoneOutlined />, label: '内容审核', code: 'analytics:platform:query' },
   { key: '/platform/ai-service', icon: <RobotOutlined />, label: 'AI 服务', code: 'ai:service:query' },
   { key: '/platform/system-meta', icon: <SettingOutlined />, label: '系统参数', code: 'system:agency:query' },
+  { key: '/platform/roles', icon: <SafetyOutlined />, label: '角色权限', code: 'system:role:query' },
+  { key: '/platform/logs/operation', icon: <FileSearchOutlined />, label: '操作日志', code: 'system:permission:query' },
+  { key: '/platform/logs/login', icon: <LoginOutlined />, label: '登录日志', code: 'system:permission:query' },
+  { key: '/platform/logs/system', icon: <FileTextOutlined />, label: '系统日志', code: 'system:permission:query' },
 ]
 
 /** 这两页要占满可视区，不能套 Content 的 24px 内边距。 */

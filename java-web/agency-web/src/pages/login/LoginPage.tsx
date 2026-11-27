@@ -94,6 +94,10 @@ export default function LoginPage() {
               // Node 直接返回 SVG 字符串，原样渲染；这里不引入任何第三方验证码组件
               dangerouslySetInnerHTML={{ __html: captcha?.captcha_image ?? '' }}
             />
+            {/* 拿不到图时给一句话，否则用户只看到一块空白，不知道该点"换一张" */}
+            {!captcha?.captcha_image && (
+              <Text type="secondary">验证码没加载出来，点「换一张」重试</Text>
+            )}
             {captcha?.dev_code && <Text type="secondary">开发环境验证码：{captcha.dev_code}</Text>}
           </Form.Item>
 

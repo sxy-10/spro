@@ -312,6 +312,62 @@ public class PlatformController {
         return ApiResult.ok(node.get("/v1/platform/system-meta", Sessions.requireToken(request)));
     }
 
+    /* ==================== 日志审计（S3 · T7） ==================== */
+
+/**
+ * 日志三页统一数据源：GET /v1/admin/audit/logs（Node 权限码 system:permission:query）。
+ * 参数白名单透传：type（login/operation/system）、level（仅 system）、from/to、page/size。
+ */
+@GetMapping("/api/platform/logs")
+public ApiResult<JsonNode> logs(@RequestParam(defaultValue = "1") int page,
+                                @RequestParam(defaultValue = "20") int size,
+                                @RequestParam String type,
+                                @RequestParam(required = false) String level,
+                                @RequestParam(name = "from", required = false) String from,
+                                @RequestParam(name = "to", required = false) String to,
+                                HttpServletRequest request) {
+    Map<String, Object> params = new LinkedHashMap<>();
+    params.put("type", type);
+    if ("system".equals(type) && level != null && !level.isBlank()) {
+        params.put("level", level);
+    }
+    params.put("from", from);
+    params.put("to", to);
+    params.put("page", page);
+    params.put("size", size);
+    return ApiResult.ok(node.get("/v1/admin/audit/logs" + query(params),
+            Sessions.requireToken(request)));
+}
+
+    /* ==================== 角色与权限（S3） ==================== */
+
+/** 权限资源树 + 按钮清单：GET /v1/permissions（权限码 system:permission:query）。 */
+@GetMapping("/api/platform/permissions")
+public ApiResult<JsonNode> permissions(HttpServletRequest request) {
+    return ApiResult.ok(node.get("/v1/permissions", Sessions.requireToken(request)));
+}
+
+/** 某角色已勾选的权限 id 集合：GET /v1/roles/{id}/permissions（权限码 system:role:query）。 */
+@GetMapping("/api/platform/roles/{id}/permissions")
+public ApiResult<JsonNode> rolePermissions(@PathVariable String id, HttpServletRequest request) {
+    return ApiResult.ok(node.get("/v1/roles/" + numeric(id) + "/permissions",
+            Sessions.requireToken(request)));
+}
+
+/** 保存角色权限（全量覆盖）：PUT /v1/roles/{id}/permissions（权限码 system:role:update）。 */
+public record RolePermissionsBody(java.util.List<String> permissionIds) {
+}
+
+@PutMapping("/api/platform/roles/{id}/permissions")
+public ApiResult<JsonNode> updateRolePermissions(@PathVariable String id,
+                                                 @RequestBody RolePermissionsBody body,
+                                                 HttpServletRequest request) {
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("permission_ids", body.permissionIds());
+    return ApiResult.ok(node.put("/v1/roles/" + numeric(id) + "/permissions", payload,
+            Sessions.requireToken(request)));
+}
+
     /* ==================== 小工具 ==================== */
 
     /** 只放非空参数；Node 的 zod 对空串会直接 400，空值一律丢弃。 */

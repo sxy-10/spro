@@ -118,3 +118,21 @@ VALUES (1, '2026-12-01', 40);
 前端“我的”页面新增线路预订，先查余位，再提交订单；提交时后端仍独立校验。新测试覆盖余位查询、非法日期、无库存、并发抢余位、幂等锁位、创建失败回滚、取消释放、超时释放、过期支付和重复支付。测试使用数据库替身，真实 MySQL 行锁和迁移需另行联调。
 
 本次验证：前后端构建及 HTTP 测试通过；当前 MySQL 连接不可用，增量迁移和真实持久化尚未执行。依赖兼容修复后，前端审计为零漏洞；后端审计仍报告 qs/express 链上的两项 moderate 漏洞，需在升级依赖后重新审计。
+
+## 平台方 BFF 聚合接口（/api/platform/*，S3）
+
+浏览器经 Spring Boot BFF（java-web，端口 8080）访问平台方能力；BFF 只做 Session 认证、CSRF 校验、HMAC 签名与字段透传，权限判定全部在 Node 的 `requireAction`。响应包络与 /v1 一致（`code/message/data/trace_id`）。本节由组员2追加（T8 文档同步，D10 纪律：代码合并前文档先改）。
+
+| 方法 | 路径 | Node 权限码 | 说明 |
+|---|---|---|---|
+| GET | `/api/platform/logs` | system:permission:query | 日志三页统一入口；query：type(login/operation/system 必填)、level(仅 system)、from/to(ISO-8601 含时区)、page、size；返回 {list,total,has_more} |
+| GET | `/api/platform/permissions` | system:permission:query | 权限树 + 按钮清单（角色页数据源） |
+| GET | `/api/platform/roles/{id}/permissions` | system:role:query | 角色已授权 permission_id 列表 |
+| PUT | `/api/platform/roles/{id}/permissions` | system:role:update | 全量覆盖授权；body: **{permission_ids:[...]}**（snake_case，发驼峰会被 Java 的 SNAKE_CASE 策略丢掉→10001）；Node 自动补祖先菜单 |
+| GET | `/api/platform/overview` 等其余 9 页聚合接口 | 见各页 | 与 PlatformController 一一对应，字段透传 snake_case |
+
+写接口均需 CSRF 头 `X-XSRF-TOKEN`（前端 `lib/http.ts` 自动携带）；幂等键与 HMAC 签名由 BFF 服务端补齐，浏览器不接触任何令牌（Cookie 仅 `JSESSIONID` + `XSRF-TOKEN`）。
+
+实现注意（踩坑记录，详见 `docs/plan/Node问题单.md`）：
+- BFF 转发一律 `URI.create(baseUrl + path)` 自拼绝对地址：`uri(String)` 会二次编码 `%XX`（时间参数 → 10001），`uri(相对URI)` 不套 baseUrl（→ `URI with undefined scheme` 500）。
+- 日志时间口径：库里 `created_at` 为 UTC 墙钟（mysql2 `timezone:'Z'`），from/to 传 UTC ISO；展示层由前端转本机时区。

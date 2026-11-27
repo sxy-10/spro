@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -44,10 +45,14 @@ public class NodeApiClient {
 
     private final RestClient client;
     private final RequestSigner signer;
+    /** Node 基址（去掉尾部斜杠），用于把相对 path 拼成绝对 URI。 */
+    private final String baseUrl;
 
-    public NodeApiClient(RestClient nodeRestClient, RequestSigner requestSigner) {
+    public NodeApiClient(RestClient nodeRestClient, RequestSigner requestSigner, NodeProperties properties) {
         this.client = nodeRestClient;
         this.signer = requestSigner;
+        String configured = properties.baseUrl() == null ? "" : properties.baseUrl();
+        this.baseUrl = configured.endsWith("/") ? configured.substring(0, configured.length() - 1) : configured;
     }
 
     /** GET：Node 只校验 Bearer，不校验签名（签名只保护写请求）。 */
@@ -139,7 +144,14 @@ public class NodeApiClient {
         }
 
         try {
-            RestClient.RequestBodySpec spec = client.method(method).uri(path).headers(h -> headers.forEach(h::set));
+            // 两个必须同时满足的要求，决定了这里只能自己拼绝对 URI：
+            // 1) 不能用 RestClient 的 uri(String)：默认 EncodingMode=TEMPLATE_AND_VALUES 会把
+            //    已编码的 %XX 再编一次（%3A → %253A），Node 收到字面量后 zod 校验失败报 10001；
+            // 2) 也不能 uri(相对URI)：RestClient 的 uri(URI) 重载不会套用 builder 里的 baseUrl，
+            //    直接抛 IllegalArgumentException: URI with undefined scheme（登录/验证码 500 就是这个）。
+            // URI.create 只解析、不编码，正好保留各 controller 已用 URLEncoder 编好的 %XX。
+            URI target = URI.create(baseUrl + path);
+            RestClient.RequestBodySpec spec = client.method(method).uri(target).headers(h -> headers.forEach(h::set));
             if (bodyJson != null) {
                 spec = spec.contentType(MediaType.APPLICATION_JSON);
             }

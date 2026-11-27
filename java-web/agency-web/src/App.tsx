@@ -1,3 +1,8 @@
+import RolesPage from './pages/platform/RolesPage'
+import OperationLogPage from './pages/platform/logs/OperationLogPage'
+import LoginLogPage from './pages/platform/logs/LoginLogPage'
+import SystemLogPage from './pages/platform/logs/SystemLogPage'
+import ServerErrorPage from './pages/error/ServerErrorPage'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
 import RequireAuth from './components/RequireAuth'
@@ -72,8 +77,13 @@ export default function App() {
         <Route path="audits" element={<AuditsPage />} />
         <Route path="ai-service" element={<AiServicePage />} />
         <Route path="system-meta" element={<SystemMetaPage />} />
+        <Route path="roles" element={<RolesPage />} />
+        <Route path="logs/operation" element={<OperationLogPage />} />
+        <Route path="logs/login" element={<LoginLogPage />} />
+        <Route path="logs/system" element={<SystemLogPage />} />
       </Route>
       <Route path="/403" element={<ForbiddenPage />} />
+      <Route path="/500" element={<ServerErrorPage />} />
       <Route path="/" element={<Navigate to="/agency/dashboard" replace />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

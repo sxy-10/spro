@@ -14,6 +14,8 @@ const PLATFORM_ACCESS_CODES = [
   'system:agency:query', // 旅行社管理 / 系统参数
   'system:user:query', // 账号管理
   'ai:service:query', // AI 服务
+  'system:permission:query', // 日志三页（S3 追加）
+  'system:role:query',       // 角色权限页（S3 追加）
 ] as const
 
 export function RequirePlatform({ children }: { children: ReactNode }) {
@@ -29,7 +31,8 @@ export function RequirePlatform({ children }: { children: ReactNode }) {
   const codes = me?.buttons?.map((b) => b.code) ?? []
   const allowed = PLATFORM_ACCESS_CODES.some((code) => codes.includes(code))
   if (!allowed) {
-    return <Navigate to="/agency/dashboard" replace />
+    //return <Navigate to="/agency/dashboard" replace />
+    return <Navigate to="/403" replace />  // 原 /agency/dashboard 改为 /403：验收判据④要求"手改 URL 进平台页 → 403 页面"
   }
   return <>{children}</>
 }

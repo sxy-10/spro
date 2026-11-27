@@ -57,7 +57,10 @@ class NodeApiClientTest {
                         .withConnectTimeout(Duration.ofSeconds(1))
                         .withReadTimeout(readTimeout)))
                 .build();
-        return new NodeApiClient(restClient, new RequestSigner());
+        // baseUrl 必须交给 NodeApiClient：它要把相对 path 拼成绝对 URI，
+        // 否则 RestClient.uri(相对URI) 会抛 "URI with undefined scheme"
+        NodeProperties properties = new NodeProperties(baseUrl, Duration.ofSeconds(1), readTimeout);
+        return new NodeApiClient(restClient, new RequestSigner(), properties);
     }
 
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
@@ -151,6 +154,29 @@ class NodeApiClientTest {
                     assertThat(ex.getMessage()).isEqualTo("登录已失效");
                     assertThat(ex.traceId()).isEqualTo("trace-1");
                 });
+    }
+
+    @Test
+    void 相对path能拼上baseUrl且已编码的百分号不被二次编码() {
+        AtomicReference<String> rawPath = new AtomicReference<>();
+        AtomicReference<String> rawQuery = new AtomicReference<>();
+        handler.set(exchange -> {
+            try {
+                // getRawPath/getRawQuery 拿的是未解码的原始串，才能看出 %3A 有没有被编成 %253A
+                rawPath.set(exchange.getRequestURI().getRawPath());
+                rawQuery.set(exchange.getRequestURI().getRawQuery());
+                respond(exchange, 200, "{\"code\":0,\"message\":\"ok\",\"data\":{\"ok\":true}}");
+            } catch (IOException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+
+        JsonNode data = client(Duration.ofSeconds(2))
+                .get("/v1/logs/operation?from=2026-11-25T16%3A00%3A00.000Z", "t");
+
+        assertThat(data.path("ok").asBoolean()).isTrue();
+        assertThat(rawPath.get()).isEqualTo("/v1/logs/operation");
+        assertThat(rawQuery.get()).isEqualTo("from=2026-11-25T16%3A00%3A00.000Z");
     }
 
     @Test
