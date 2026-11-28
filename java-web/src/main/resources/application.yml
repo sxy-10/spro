@@ -28,6 +28,25 @@ app:
     base-url: ${NODE_BASE_URL:http://127.0.0.1:3001}
     connect-timeout: 2s
     read-timeout: 3s
+  # S4 新增：内部接口（T4 定时器 + T11 Java 侧配置）。
+  # 密钥与出口白名单是这条链路的两把锁，缺一不可：
+  #   1) secret 必须与 Node 的 INTERNAL_API_SECRET 完全一致（≥32 字符），只在服务端与
+  #      环境变量里出现，前端产物 grep 不到；
+  #   2) 本机（部署机）的私网出口 IP 必须登记进 Node 的 INTERNAL_ALLOWED_IPS，
+  #      否则 Node 侧直接空 404（表现为定时任务全部失败、大屏预聚合读不到）。
+  internal:
+    base-url: ${NODE_BASE_URL:http://127.0.0.1:3001}
+    secret: ${INTERNAL_API_SECRET:}
+    # 关掉自动调度（验收"停预聚合看大屏停更"、纯压测时用），不影响手动触发接口
+    timers-enabled: ${INTERNAL_TIMERS_ENABLED:true}
+    # 演示用故障注入：填任务名即让该任务每轮必失败，验证"单任务失败不影响其他三个"
+    fail-task: ${INTERNAL_FAIL_TASK:}
+    # Quartz 六段 cron（第一段是秒），与 docs/plan/定时任务清单.md 的建议频率一致
+    timers:
+      expire-orders: "*/10 * * * * ?"
+      refresh-stock: "0 */5 * * * ?"
+      seckill-toggle: "0 * * * * ?"
+      dashboard-preagg: "0 */5 * * * ?"
   security:
     # 浏览器侧只持会话 Cookie，不得下发任何 token
     session-header-name: X-Trace-Id

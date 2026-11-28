@@ -20,12 +20,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 
 /**
  * 登录链路端到端（Java 侧）：验证码 → 登录 → /api/me → 页面聚合接口。
@@ -36,6 +38,14 @@ import org.springframework.test.web.servlet.MvcResult;
 @SpringBootTest
 @AutoConfigureMockMvc
 class AuthFlowTest {
+
+    /**
+     * MockMvc 不启动真实 Tomcat，ServletContext 里没有 {@code jakarta.websocket.server.ServerContainer}，
+     * 真的去构造 {@link ServletServerContainerFactoryBean} 会把整个上下文刷挂（问题单 #3）。
+     * 这里用 Mock 顶掉那个 bean：WS 容器参数只对真实容器有意义，本用例验的是 HTTP 链路。
+     */
+    @MockBean
+    private ServletServerContainerFactoryBean webSocketContainer;
 
     private static final AtomicInteger ORDERS_CALLS = new AtomicInteger();
     private static final AtomicReference<String> LOGIN_OVERRIDE = new AtomicReference<>();
@@ -54,6 +64,11 @@ class AuthFlowTest {
     @DynamicPropertySource
     static void nodeProperties(DynamicPropertyRegistry registry) {
         registry.add("app.node.base-url", () -> "http://127.0.0.1:" + NODE.getAddress().getPort());
+        // 测试不要起 Quartz：四个定时任务会在用例期间空跑并刷错误日志
+        registry.add("app.internal.timers-enabled", () -> "false");
+        // 内部接口指向同一个 Node 桩即可（本用例不触发它，但不让启动期因缺密钥报错）
+        registry.add("app.internal.base-url", () -> "http://127.0.0.1:" + NODE.getAddress().getPort());
+        registry.add("app.internal.secret", () -> "test-internal-secret-with-more-than-32-characters");
     }
 
     @AfterAll

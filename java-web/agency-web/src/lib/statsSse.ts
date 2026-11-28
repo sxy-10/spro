@@ -10,6 +10,8 @@
  *   且不再需要 Authorization —— 浏览器只带 JSESSIONID，token 由 Java 侧注入。
  */
 
+import { fetchRealtimeTicket } from './realtime'
+
 export interface LiveSnapshot {
   online_count: number
   online_conn: number
@@ -106,8 +108,18 @@ export function openLiveStats(handlers: LiveStatsHandlers): LiveStatsHandle {
     if (closed) return
     abort = new AbortController()
 
+    // 每次（含每次重连）都换一张新票：票根一次性 + 30 秒有效，复用必然 401
+    let ticket: string
     try {
-      const res = await fetch(ENDPOINT, {
+      ticket = await fetchRealtimeTicket()
+    } catch (error) {
+      scheduleReconnect(error instanceof Error ? error.message : '换票失败')
+      return
+    }
+    if (closed) return
+
+    try {
+      const res = await fetch(`${ENDPOINT}?ticket=${encodeURIComponent(ticket)}`, {
         method: 'GET',
         headers: { Accept: 'text/event-stream' },
         credentials: 'same-origin',

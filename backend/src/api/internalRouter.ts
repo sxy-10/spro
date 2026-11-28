@@ -142,6 +142,7 @@ async function runTimer(task: TimerName): Promise<Record<string, unknown>> {
   const [rows] = await pool.query<RowDataPacket[]>(`
     SELECT
       (SELECT COUNT(*) FROM tour_order WHERE DATE(created_at)=UTC_DATE()) AS today_orders,
+      (SELECT COUNT(*) FROM tour_order WHERE status IN ('PENDING','PAID')) AS pending_confirms,
       (SELECT COALESCE(SUM(total_amount),0) FROM tour_order
         WHERE DATE(created_at)=UTC_DATE() AND status IN ('PAID','CONFIRMED','COMPLETED')) AS today_revenue,
       (SELECT COUNT(*) FROM travel_product WHERE status='ON_SALE') AS active_routes,
@@ -149,6 +150,7 @@ async function runTimer(task: TimerName): Promise<Record<string, unknown>> {
   `);
   const snapshot = {
     today_orders: Number(rows[0].today_orders),
+    pending_confirms: Number(rows[0].pending_confirms),
     today_revenue: String(rows[0].today_revenue),
     active_routes: Number(rows[0].active_routes),
     active_users: Number(rows[0].active_users),
@@ -159,6 +161,23 @@ async function runTimer(task: TimerName): Promise<Record<string, unknown>> {
   await redis.set(redisKey('dashboard:preagg'), JSON.stringify(snapshot), 'EX', 7200);
   return { task, ...snapshot };
 }
+
+/**
+ * 只读预聚合快照（S4 新增，配合 T4 的 dashboard-preagg 任务）。
+ *
+ * 为什么放在 /internal 而不是 /v1：快照里是全平台口径的经营数字，不是某个机构的数据，
+ * 不该经用户态接口暴露。它只由 BFF 用内部签名读取，公网来源照旧空 404。
+ *
+ * 语义三态：key 存在 → 200 + 快照（generated_at 即"这批数字是什么时候算的"）；
+ * key 不存在 → 404/20016（BFF 据此显示"预聚合尚未生成"）；Redis 不可用 → 503。
+ */
+internalRouter.get('/dashboard/preagg', run(async (_req, res) => {
+  const redis = getRedis();
+  if (!redis || !isRedisReady()) throw new ApiError(503, 50001, '预聚合结果暂不可用');
+  const cached = await redis.get(redisKey('dashboard:preagg'));
+  if (!cached) throw new ApiError(404, 20016, '预聚合结果尚未生成，等待 dashboard-preagg 任务');
+  reply(res, JSON.parse(cached));
+}));
 
 internalRouter.post('/timers/:task', run(async (req, res) => {
   const task = req.params.task as TimerName;

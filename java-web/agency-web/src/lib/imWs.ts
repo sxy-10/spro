@@ -2,7 +2,8 @@
  * 客服台的 IM WebSocket 客户端（基于 BFF 桥接的 /api/im/ws）。
  *
  * 与旧实现（frontend/shared/ws.ts）的三处差异，都是架构变化逼出来的：
- *   1. 地址从 ws://host/v1/im/ws?token=… 换成 ws://host/api/im/ws：
+ *   1. 地址从 ws://host/v1/im/ws?token=… 换成 ws://host/api/im/ws?ticket=…：
+ *      每次建连前先 POST /api/realtime/ticket 换一张 30 秒一次性票根（S4）；
  *      token 只存在于服务端会话里，Java 侧连 Node 时自己带，浏览器不再接触；
  *   2. 因此**不再发送 auth 帧**：握手完成即代表鉴权完成（Java 用 ?token= 直连 Node），
  *      再发 auth 反而会用空 token 覆盖掉服务端已建立的认证状态；
@@ -12,6 +13,7 @@
  */
 
 import { xsrfToken } from './csrf'
+import { fetchRealtimeTicket } from './realtime'
 
 export const PROTOCOL_VERSION = 1
 
@@ -69,6 +71,8 @@ export interface ImWsClientOptions {
   defaultConvId?: string | number
   /** 获取已知最新 seq，断线重连 sync 帧对账用 */
   getLastSeq?: (convId: string | number) => number
+  /** 取一次性票根；默认走 lib/realtime（单测/联调可注入假实现） */
+  getTicket?: () => Promise<string>
 }
 
 const BACKOFF_STEPS = [1000, 2000, 4000, 8000, 16000, 30000]
@@ -87,6 +91,8 @@ export class ImWsClient {
   private pollingTimer: ReturnType<typeof setTimeout> | null = null
   private isDestroyed = false
   private isPollingActive = false
+  /** 建连序号：换票是异步的，序号变了说明又发起了新连接，旧结果直接丢弃 */
+  private connectSeq = 0
 
   private messageListeners = new Set<(msg: ImMessageFrame) => void>()
   private ackListeners = new Set<(ack: ImAckOkFrame) => void>()
@@ -145,10 +151,14 @@ export class ImWsClient {
     })
   }
 
-  private resolveWsUrl(): string {
-    if (this.options.url) return this.options.url
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${protocol}//${window.location.host}/api/im/ws`
+  /** 票根是一次性的：每次建连（含自动重连）都必须重新换票，复用必被 401 拒绝。 */
+  private resolveWsUrl(ticket: string): string {
+    const base = this.options.url ?? (() => {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${protocol}//${window.location.host}/api/im/ws`
+    })()
+    const sep = base.includes('?') ? '&' : '?'
+    return `${base}${sep}ticket=${encodeURIComponent(ticket)}`
   }
 
   connect(): void {
@@ -166,8 +176,25 @@ export class ImWsClient {
 
     this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting')
 
+    // 序号用来丢弃"换票期间又发起了新连接"的过期结果（例如用户切了会话）
+    const seq = ++this.connectSeq
+    void this.openWithTicket(seq)
+  }
+
+  private async openWithTicket(seq: number): Promise<void> {
+    let ticket: string
     try {
-      this.socket = new WebSocket(this.resolveWsUrl())
+      ticket = await (this.options.getTicket ?? fetchRealtimeTicket)()
+    } catch (error) {
+      if (seq !== this.connectSeq || this.isDestroyed) return
+      console.warn('[ImWsClient] 换票失败，按退避重连:', error)
+      this.scheduleReconnect()
+      return
+    }
+    if (seq !== this.connectSeq || this.isDestroyed) return
+
+    try {
+      this.socket = new WebSocket(this.resolveWsUrl(ticket))
 
       this.socket.onopen = () => {
         // 鉴权在握手阶段由 BFF 完成，这里只需要维持心跳；连上后等 auth_ok 再改状态

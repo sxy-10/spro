@@ -199,7 +199,9 @@ PUT  ... {"permissionIds":["10"]}           → 10001（旧前端写法，复现
 | 登记人 | 组员2（S3） |
 | 日期 | 2026-11-27 |
 | 执行人 | **组员4**（`ImWebSocketConfig` 属 IM 域） |
-| 状态 | **待处理** |
+| 状态 | **已处理**（采用建议 3：`@MockBean` 顶掉 `webSocketContainer`） |
+| 执行时间 | 2026-11-28 |
+| 验证方式 | `./mvnw -Dskip.frontend=true test`：`AuthFlowTest` 4 例转绿，全量 11→18 例通过（另新增 `WsTicketServiceTest` 4 例、`InternalSignerTest` 3 例） |
 | 优先级 | 低（不影响 S3 验收；影响的是 `mvn test` 整体绿灯） |
 
 ### 现象
@@ -231,3 +233,116 @@ IM 代码来自提交 `78d45e5`，与 S3 的 `NodeApiClient` 改动无关。
 ### 影响
 
 - S3 的验收证据不受影响：`NodeApiClientTest` 5/5 通过，登录/验证码/角色权限均已用真实实例端到端验证（见 #2 的实测记录）。
+
+### 处理记录（组员4，2026-11-28）
+
+采用建议 3，只动测试、不动生产配置：
+
+```java
+// AuthFlowTest
+@MockBean
+private ServletServerContainerFactoryBean webSocketContainer;
+```
+
+同时在该用例的 `@DynamicPropertySource` 里补两行，避免测试期间起 Quartz 空跑：
+`app.internal.timers-enabled=false`、`app.internal.base-url` 指向同一个 Node 桩。
+
+为什么没选建议 1：在 bean 方法里判断 `ServerContainer` 属性存在与否，取决于 Tomcat SCI
+（`WsSci`）与 Spring 初始化的先后顺序，MockMvc 与真实容器表现不一致，属于"测试环境耦合"；
+建议 2 会失去 `MockHttpSession`（`RANDOM_PORT` 下 `@AutoConfigureMockMvc` 不可用），
+而这 4 个用例断言的正是"同一会话在登录后能继续访问受保护接口"。
+
+---
+
+## #4 [S4] 大屏预聚合需要一个只读内部接口，且快照缺 `pending_confirms`
+
+| 项 | 内容 |
+|---|---|
+| 登记人 | 组员4（S4） |
+| 日期 | 2026-11-28 |
+| 执行人 | 组员4 代改（**需组员3 复核**，`backend/**` 属 Node 独占域） |
+| 状态 | **待处理**（代码已就位，等组员3 确认后改状态） |
+| 优先级 | 高（不补则 S4 出口判据「关掉预聚合任务后大屏数字停更」无法成立） |
+
+### 现象与根因
+
+S4 要求大屏只读预聚合（`GET /api/agency/dashboard-metrics` 的数据源为 Redis `dashboard:preagg`），
+但 S1 交付的 `internalRouter.ts` 只有四个 `POST /internal/timers/*`：
+**没有任何"读预聚合"的入口**，Java 侧无法在不碰 `backend/**` 的前提下读到快照，
+只能继续调 `/v1/admin/dashboard` 现算 —— 那样停掉预聚合任务后数字照样跳动，判据失真。
+
+另：`dashboard-preagg` 写入的快照只有 `today_orders / today_revenue / active_routes / active_users`，
+缺 S3 已冻结的 `pending_confirms`（大屏 4 个数字之一）。
+
+### 代改内容（两处，均为追加，未改既有行为）
+
+1. `backend/src/api/internalRouter.ts` → 新增只读路由（复用同一套 `authenticateInternal`，
+   公网来源仍为空 404）：
+
+   ```ts
+   internalRouter.get('/dashboard/preagg', run(async (_req, res) => {
+     const redis = getRedis();
+     if (!redis || !isRedisReady()) throw new ApiError(503, 50001, '预聚合结果暂不可用');
+     const cached = await redis.get(redisKey('dashboard:preagg'));
+     if (!cached) throw new ApiError(404, 20016, '预聚合结果尚未生成，等待 dashboard-preagg 任务');
+     reply(res, JSON.parse(cached));
+   }));
+   ```
+
+2. `dashboard-preagg` 的 SQL 增一列、快照增一个字段：
+
+   ```sql
+   (SELECT COUNT(*) FROM tour_order WHERE status IN ('PENDING','PAID')) AS pending_confirms
+   ```
+
+### 复核要点（组员3）
+
+- `20016` 是否已被占用（本文沿用"待生成"语义，未新增错误码）；
+- `GET` 无 body 时 `JSON.stringify(req.body ?? {})` 是否等于 `{}`（Java 侧按 `{}` 签名，`InternalSignerTest` 已钉住）；
+- 快照多一个字段是否影响既有消费方（目前只有本仓库 Java 读它，无其他调用方）。
+
+### Java 侧对应实现
+
+`InternalApiClient#dashboardPreagg()` / `AgencyDashboardController#dashboardMetrics()`：
+404/20016 → `source=preagg_pending`（页面提示"尚未生成"），其余 401/503 原样上抛（不假装 0）。
+
+---
+
+## #5 [S4] 全新库上 `seedGuidesTeams.ts` 因外键 `fk_member_order` 失败（seed 顺序依赖）
+
+| 项 | 内容 |
+|---|---|
+| 登记人 | 组员4（S4） |
+| 日期 | 2026-11-28 |
+| 执行人 | 组员3（`backend/scripts` 属 Node 域） |
+| 状态 | **待处理**（未改动，仅登记） |
+| 优先级 | 低（不阻塞 S4 判据；影响"一键起环境"的完整性） |
+
+### 现象（已实测复现）
+
+在临时 MySQL 8.0 实例上按 `migrate.ts → seedDemo.ts → seedGuidesTeams.ts` 顺序执行：
+
+```
+[migrate] 完成：travel_agent_db 共 53 张表
+[seed] 演示数据播种完成。账号：super / admin / staff02 / yun_admin，密码均为 Admin@2026
+[seedGuidesTeams] 失败已回滚: Cannot add or update a child row: a foreign key constraint fails
+(`travel_agent_db`.`tour_team_member`, CONSTRAINT `fk_member_order` FOREIGN KEY (`order_id`)
+REFERENCES `tour_order` (`id`) ON DELETE SET NULL)
+```
+
+### 根因（推测，未经组员3 确认）
+
+`seedGuidesTeams.ts` 给 `tour_team_member.order_id` 写的是硬编码订单号，而 `seedDemo.ts`
+每次播种生成的订单 id 不固定（自增起点取决于库状态），于是外键指向了不存在的行。
+`seedDemo.ts` 空密码时还会先被前置校验拦下（`缺少 DB_PASSWORD`），需先给 root 设密码。
+
+### 建议
+
+- 改法 A：`order_id` 改为从库里现查一个 `tour_order.id`（`SELECT id FROM tour_order LIMIT 1`），查不到就写 `NULL`；
+- 改法 B：把 `seedGuidesTeams` 的依赖前置到 `seedDemo` 里同一事务，播种顺序由代码保证。
+
+### 影响
+
+- S4 的四条判据不依赖该脚本（我的验收用 `seedDemo` 的 4 条待确认订单即可跑通）；
+- 但"新人照着 README 起环境"会在这一步吃到红字，建议合并前修掉。
+

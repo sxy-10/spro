@@ -1,6 +1,8 @@
 package com.example.adminweb.web;
 
 import com.example.adminweb.api.NodeStreamClient;
+import com.example.adminweb.realtime.RealtimeAuth;
+import com.example.adminweb.realtime.WsTicketService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,15 +34,18 @@ public class LiveStatsController {
     private static final Logger log = LoggerFactory.getLogger(LiveStatsController.class);
 
     private final NodeStreamClient streams;
+    private final WsTicketService tickets;
 
-    public LiveStatsController(NodeStreamClient streams) {
+    public LiveStatsController(NodeStreamClient streams, WsTicketService tickets) {
         this.streams = streams;
+        this.tickets = tickets;
     }
 
     @GetMapping(value = "/api/stats/live", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter live(HttpServletRequest request) {
-        // 必须在当前请求线程里取 token：SseEmitter 的回调线程没有 SecurityContext
-        String token = Sessions.requireToken(request);
+        // 必须在当前请求线程里取凭证：SseEmitter 的回调线程没有 SecurityContext。
+        // 前端走 ?ticket= 一次性票根；无 ticket 时回落到会话（排障用）。
+        String token = RealtimeAuth.resolve(request, tickets);
 
         // 0L = 不超时。服务端 Node 每 5s 一拍，30s 无数据由浏览器侧的看门狗判死并重连。
         SseEmitter emitter = new SseEmitter(0L);
